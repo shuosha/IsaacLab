@@ -827,6 +827,57 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
                 torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
             )[1]
 
+        if self.teleop_mode:
+            base_fingertip_pos = self.load_all_episode_act_pos(self.cfg_task.action_data_path)
+            base_fingertip_pos = base_fingertip_pos.reshape(-1, 3)
+
+            from isaacsim.util.debug_draw import _debug_draw
+            draw = _debug_draw.acquire_debug_draw_interface()
+            draw.clear_lines()
+            base_fingertip_pos = (base_fingertip_pos + self.scene.env_origins).cpu().numpy().tolist()
+            purple_color = [(1, 0, 1, 1)]* len(base_fingertip_pos)
+
+            draw.draw_points(base_fingertip_pos, purple_color, [5]*len(base_fingertip_pos))
+
+
+    def load_all_episode_act_pos(self, path, pad=True):
+        """
+        Load ALL episodes' action positions from a .npz file.
+
+        Returns:
+            list_of_trajs : list of (T, 3) tensors
+        """
+        flat = np.load(path, allow_pickle=True)
+        flat = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in flat.items()}
+
+        eps = sorted({k.split("/", 1)[0] for k in flat})
+        pos_traj = []
+        quat_traj = []
+
+        # compute max length if padding is needed
+        lengths = [len(flat[f"{e}/action.eef_pos"]) for e in eps]
+        maxT = max(lengths)
+
+        for e in eps:
+            pos = flat[f"{e}/action.eef_pos"].to(self.device)  # (T, 3)
+            quat = flat[f"{e}/action.eef_quat"].to(self.device)  # (T, 4)
+
+            pos = torch_utils.tf_combine( # NOTE: real eef != sim eef
+                quat,
+                pos,
+                torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device).repeat(quat.shape[0], 1),
+                torch.tensor([[0, 0, 0.225]], device=self.device).repeat(quat.shape[0], 1),
+            )[1]
+
+            if pad and pos.shape[0] < maxT:
+                pad_len = maxT - pos.shape[0]
+                pos = torch.cat([pos, pos[-1:].repeat(pad_len, 1)], dim=0)
+                quat = torch.cat([quat, quat[-1:].repeat(pad_len, 1)], dim=0)
+            pos_traj.append(pos)
+            quat_traj.append(quat)
+
+        return torch.stack(pos_traj)
+
     def _set_franka_to_default_pose(self, joints, env_ids):
         """Return Franka to its default joint position."""
         gripper_width = self.cfg_task.held_asset_cfg.diameter / 2 * 1.25 # 0.005 m

@@ -115,6 +115,7 @@ def quat_geodesic_angle(q1: torch.Tensor, q2: torch.Tensor, eps: float = 1e-8):
 
 key_states = {
     "r": False,
+    "p": False
 }
 
 def on_press(key):
@@ -258,7 +259,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     act_eef_quat = []
     act_gripper = []
 
-    name = "test"
+    name = "gearmesh_old_policy"
     out_path = f"logs/teleop/{name}"
     os.makedirs(out_path, exist_ok=True)
     cam_path = os.path.join(out_path, "camera_1", "rgb")
@@ -274,6 +275,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
+    use_policy = False
     while simulation_app.is_running():
         start_time = time.time()
         # run everything in inference mode
@@ -309,12 +311,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 obs = obs["policy"]
                 timestep = 0
                 continue
+            if key_states["p"]:
+                use_policy = not use_policy
+                print(f"[INFO] Toggling policy usage to: {use_policy}")
+                time.sleep(0.5)  # debounce
 
             env.unwrapped.base_actions = base_state
             print("Base fingertip pose:", base_state.cpu().numpy())
 
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) * 0.0
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) * float(use_policy)
 
             # log data
             obs_eef_pos.append(obs[:,:3].cpu().numpy())
