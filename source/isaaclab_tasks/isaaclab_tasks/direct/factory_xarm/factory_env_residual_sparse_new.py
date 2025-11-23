@@ -576,7 +576,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         task_successes = self._get_curr_successes(
             success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
         )
-        # task_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
+        task_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
 
         held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
             self.held_pos, self.held_quat, self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
@@ -590,15 +590,15 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             self.device,
         )
 
-        # target_held_base_pos[:, 2] += self.cfg_task.fixed_asset_cfg.height # 2cm
-        xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
-        z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
+        # Relaxed Rewards:
+        # xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
+        # z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-        is_centered = torch.where(xy_dist < 0.015, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        is_close_or_below = torch.where(
-            z_disp < self.cfg_task.fixed_asset_cfg.height * 1.2, torch.ones_like(task_successes), torch.zeros_like(task_successes)
-        )
-        task_engaged = torch.logical_and(is_centered, is_close_or_below)
+        # is_centered = torch.where(xy_dist < 0.015, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        # is_close_or_below = torch.where(
+        #     z_disp < self.cfg_task.fixed_asset_cfg.height * 1.2, torch.ones_like(task_successes), torch.zeros_like(task_successes)
+        # )
+        # task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         # self.red_sphere_marker.visualize(self.env_actions[:,:3] + self.scene.env_origins)
         # self.blue_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
