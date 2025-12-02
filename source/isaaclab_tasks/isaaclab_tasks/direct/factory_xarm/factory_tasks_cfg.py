@@ -80,7 +80,7 @@ class FactoryTask:
     keypoint_coef_fine: list = [100, 0]  # Smaller distances for threading or last-inch insertion.
     # Fixed-asset height fraction for which different bonuses are rewarded (see individual tasks).
     success_threshold: float = 0.04
-    engage_threshold: float = 1.2
+    engage_threshold: float = 0.9
 
 
 @configclass

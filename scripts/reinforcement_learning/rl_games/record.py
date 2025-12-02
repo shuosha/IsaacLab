@@ -187,11 +187,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
     env.unwrapped.visualize_markers = True # type: ignore
+    env.unwrapped.visualize_traj = False
 
+    output_path = "logs/rollouts/v1_gearmesh_5cm_dmr"
+    debug_dir = f"{output_path}/debug"
+    os.makedirs(debug_dir, exist_ok=True)
+    for i in range(env.unwrapped.num_envs):
+        out_path = f"{output_path}/episode_{i:04d}"
+        os.makedirs(out_path, exist_ok=True)
+        cam_path = os.path.join(out_path, "camera_1", "rgb")
+        os.makedirs(cam_path, exist_ok=True)
     # reset environment
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
+
     timestep = 0
     # required: enables the flag for batched observations
     _ = agent.get_batch_size(obs, 1)
@@ -210,6 +220,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            print(f"[DEBUG] Timestep {timestep}")
+
+            for i in range(env.unwrapped.num_envs):
+                if torch.sum(env.unwrapped.first_done).item() == env.unwrapped.num_envs:
+                    print("[INFO] All episodes finished.")
+                    break
+                if env.unwrapped.first_done[i].item() == True:
+                    print(f"[INFO] Env {i} finished at timestep {timestep}.")
+                    continue  # skip finished timesteps
+                cam_path = f"{output_path}/episode_{i:04d}/camera_1/rgb"
+                img = env.unwrapped.front_rgb[i].cpu().numpy()
+                img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(os.path.join(cam_path, f"{timestep:06d}.jpg"), img_bgr)
             # env stepping
             obs, _, dones, _ = env.step(actions)
 
@@ -219,8 +242,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 if agent.is_rnn and agent.states is not None:
                     for s in agent.states:
                         s[:, dones, :] = 0.0
+        timestep += 1
         if args_cli.video:
-            timestep += 1
             # exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break

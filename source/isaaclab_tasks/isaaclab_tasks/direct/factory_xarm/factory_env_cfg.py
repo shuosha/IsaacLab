@@ -369,7 +369,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         prim_path="/Visuals/red_sphere_marker",
         markers={
             "sphere": sim_utils.SphereCfg(
-                radius=0.002,
+                radius=0.004,
                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             )
         }
@@ -379,7 +379,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         prim_path="/Visuals/blue_sphere_marker",
         markers={
             "sphere": sim_utils.SphereCfg(
-                radius=0.002,
+                radius=0.004,
                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
             )
         }
@@ -389,7 +389,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         prim_path="/Visuals/green_sphere_marker",
         markers={
             "sphere": sim_utils.SphereCfg(
-                radius=0.002,
+                radius=0.004,
                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
             )
         }

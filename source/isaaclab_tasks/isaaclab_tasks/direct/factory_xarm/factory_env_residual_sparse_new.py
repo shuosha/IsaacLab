@@ -51,6 +51,8 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         self.visualize_markers = False # TODO: dynamic option
         self.visualize_traj = False
 
+        self.first_done = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+
         self.base_actions_agent = NearestNeighborBuffer(
             self.cfg_task.action_data_path_v3, 
             self.num_envs, 
@@ -63,6 +65,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
         self.total_episodes: int = self.base_actions_agent.get_total_episodes() 
         self.episode_idx = torch.randint(0, self.total_episodes, (self.num_envs,), device=self.device)
+        # self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
 
         # overwrite cfg
         self.cfg.episode_length_s = self.base_actions_agent.get_max_episode_length() * (self.cfg.sim.dt * self.cfg.decimation)
@@ -505,6 +508,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
             terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
 
+        done = torch.logical_or(time_out, terminated)
+        self.first_done = torch.logical_or(self.first_done, done)
+
         return terminated, time_out
 
     def _get_curr_successes(self, success_threshold, check_rot=False):
@@ -577,6 +583,10 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
         )
         task_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
+        self.first_done = torch.logical_or(self.first_done, task_successes)
+
+        # print("not yet succeeded eps:", self.episode_idx[torch.logical_not(task_successes)])
+        # print("task successes:", task_successes.sum().item())
 
         held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
             self.held_pos, self.held_quat, self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
@@ -600,11 +610,8 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         # )
         # task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
-        # self.red_sphere_marker.visualize(self.env_actions[:,:3] + self.scene.env_origins)
-        # self.blue_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
-        # print("held pos obs frame:", self.held_pos_obs_frame[0])
-        # self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
-        # print("fingertip midpoint pos:", self.fingertip_midpoint_pos[0])
+        # self.blue_sphere_marker.visualize(held_base_pos + self.scene.env_origins)
+        # self.green_sphere_marker.visualize(target_held_base_pos + self.scene.env_origins)
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
@@ -811,21 +818,25 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         self.base_actions_agent.clear(env_ids)
 
         if self.visualize_traj:
-            assert len(env_ids) == 1, "Can only visualize one env at a time."
-            self.obs_traj, obs_quat, self.act_traj, act_quat = self.base_actions_agent.get_episode_traj(self.episode_idx[env_ids].item())
-            self.obs_traj = torch_utils.tf_combine( # NOTE: real eef != sim eef
-                obs_quat,
-                self.obs_traj,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(obs_quat.shape[0], 1),
-                torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
-            )[1]
+            self.obs_traj = []
+            self.act_traj = []
+            for env_id in env_ids:
+                obs_pos, obs_quat, act_pos, act_quat = self.base_actions_agent.get_episode_traj(self.episode_idx[env_id].item())
+                obs_pos = torch_utils.tf_combine( # NOTE: real eef != sim eef
+                    obs_quat,
+                    obs_pos,
+                    torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(obs_quat.shape[0], 1),
+                    torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
+                )[1]
+                self.obs_traj.append(obs_pos)
 
-            self.act_traj = torch_utils.tf_combine( # NOTE: real eef != sim eef
-                act_quat,
-                self.act_traj,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(act_quat.shape[0], 1),
-                torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
-            )[1]
+                act_pos = torch_utils.tf_combine( # NOTE: real eef != sim eef
+                    act_quat,
+                    act_pos,
+                    torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(act_quat.shape[0], 1),
+                    torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
+                )[1]
+                self.act_traj.append(act_pos)
 
         if self.teleop_mode:
             base_fingertip_pos = self.load_all_episode_act_pos(self.cfg_task.action_data_path)
@@ -994,19 +1005,25 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         blue_color = [(0, 0, 1, 1)] * self.num_envs
         green_color = [(0, 1, 0, 1)] * self.num_envs
 
-        self.draw.draw_lines(curr_pos_list, base_pos_list, blue_color, sizes)
-        self.draw.draw_lines(base_pos_list, env_pos_list, red_color, sizes)
-        self.draw.draw_lines(curr_pos_list, env_pos_list, green_color, sizes)
+        # self.draw.draw_lines(curr_pos_list, base_pos_list, blue_color, sizes)
+        # self.draw.draw_lines(base_pos_list, env_pos_list, red_color, sizes)
+        # self.draw.draw_lines(curr_pos_list, env_pos_list, green_color, sizes)
 
+        self.blue_sphere_marker.visualize(self.base_actions[:, :3] + self.scene.env_origins)
+        self.red_sphere_marker.visualize(self.env_actions[:, :3] + self.scene.env_origins)
+        self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
 
         if hasattr(self, 'obs_traj') and self.visualize_traj:
-            obs_traj = (self.obs_traj + self.scene.env_origins).cpu().numpy().tolist()
-            yellow_color = [(1, 1, 0, 1)] * len(self.obs_traj)
+            for env_id in range(self.num_envs):
+                obs = self.obs_traj[env_id]
+                act = self.act_traj[env_id]
+                obs_traj = (obs + self.scene.env_origins[env_id]).cpu().numpy().tolist()
+                yellow_color = [(1, 1, 0, 1)] * len(obs_traj)
 
-            act_traj = (self.act_traj + self.scene.env_origins).cpu().numpy().tolist()
-            purple_color = [(1, 0, 1, 1)] * len(self.act_traj)
+                act_traj = (act + self.scene.env_origins[env_id]).cpu().numpy().tolist()
+                purple_color = [(1, 0, 1, 1)] * len(act_traj)
 
-            self.draw.draw_points(act_traj, purple_color, [5]*len(self.act_traj))
-            self.draw.draw_points(obs_traj, yellow_color, [5]*len(self.obs_traj))
+                self.draw.draw_points(act_traj, purple_color, [5]*len(act_traj))
+                self.draw.draw_points(obs_traj, yellow_color, [5]*len(obs_traj))
 
             self.visualize_traj = False
