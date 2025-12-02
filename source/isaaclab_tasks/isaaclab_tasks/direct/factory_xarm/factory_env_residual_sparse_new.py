@@ -501,7 +501,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         self._visualize_markers()
         # time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
         time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
-        print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
+        # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
         # terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.15
 
         # if self.cfg_task.name == "peg_insert":
@@ -585,7 +585,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         task_successes = self._get_curr_successes(
             success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
         )
-        task_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
+        # task_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
         self.first_done = torch.logical_or(self.first_done, task_successes)
 
         # print("not yet succeeded eps:", self.episode_idx[torch.logical_not(task_successes)])
@@ -604,14 +604,14 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         )
 
         # Relaxed Rewards:
-        # xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
-        # z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
+        xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
+        z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-        # is_centered = torch.where(xy_dist < 0.015, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        # is_close_or_below = torch.where(
-        #     z_disp < self.cfg_task.fixed_asset_cfg.height * 1.2, torch.ones_like(task_successes), torch.zeros_like(task_successes)
-        # )
-        # task_engaged = torch.logical_and(is_centered, is_close_or_below)
+        is_centered = torch.where(xy_dist < 0.015, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        is_close_or_below = torch.where(
+            z_disp < self.cfg_task.fixed_asset_cfg.height * 1.2, torch.ones_like(task_successes), torch.zeros_like(task_successes)
+        )
+        task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         # self.blue_sphere_marker.visualize(held_base_pos + self.scene.env_origins)
         # self.green_sphere_marker.visualize(target_held_base_pos + self.scene.env_origins)
@@ -640,12 +640,13 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             task_successes = torch.logical_and(task_successes, first_task_succeeded)
 
         rew_dict = {
-            "grasp_engaged": grasp_engaged.float(),# * 0.25,
-            "grasp_success": grasp_successes.float(),# * 0.5,
-            "task_engaged": task_engaged.float(),# * 0.25,
-            "task_success": task_successes.float(),# * 2.0,
-            # "task_near": task_near.float(),
+            # "grasp_engaged": grasp_engaged.float(),
+            # "grasp_success": grasp_successes.float(),
+            "task_engaged": task_engaged.float(),
+            "task_success": task_successes.float(),
         }
+        self.extras["debug_grasp_engaged"] = grasp_engaged.float().mean()
+        self.extras["debug_grasp_success"] = grasp_successes.float().mean()
         # print(rew_dict)
 
         rew_buf = torch.zeros_like(rew_dict["task_success"])
