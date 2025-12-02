@@ -334,6 +334,31 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         spawn=FRONT_PINHOLE_CFG,
     )
 
+    right_teleop_camera_cfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/right_teleop_camera",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.47, -0.26, 0.035), rot=(0.668, 0.686, 0.194, 0.212), convention="opengl"), # z-down; x-forward # greater angle = towards gripper
+        height=H,
+        width=W,
+        data_types=[
+            "rgb",
+            # "distance_to_image_plane",
+            ],
+        spawn=FRONT_PINHOLE_CFG,
+    )
+
+    left_teleop_camera_cfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/left_teleop_camera",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.515, 0.15, 0.13), rot=(0.273, 0.238, 0.416, 0.834), convention="opengl"), # z-down; x-forward # greater angle = towards gripper
+        height=H,
+        width=W,
+        data_types=[
+            "rgb",
+            # "distance_to_image_plane",
+            ],
+        spawn=FRONT_PINHOLE_CFG,
+    )
+
+
     frame_marker_cfg = VisualizationMarkersCfg(
         prim_path="/Visuals/myMarkers",
         markers={

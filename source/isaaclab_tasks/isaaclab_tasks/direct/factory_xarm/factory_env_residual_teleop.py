@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import cv2
 import numpy as np
 import torch
 import math
@@ -24,7 +25,7 @@ from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
 from .nn_buffer import NearestNeighborBuffer
 
-class FactoryEnvResidualSparseNew(DirectRLEnv):
+class FactoryEnvResidualTeleop(DirectRLEnv):
     cfg: FactoryEnvCfg
 
     def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):
@@ -186,9 +187,10 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             self.eef_contact_sensor = ContactSensor(self.cfg.eef_contact_sensor_cfg)
             self.scene.sensors["eef_contact_sensor"] = self.eef_contact_sensor
 
-        if self.enable_cameras:
-            self.front_camera = TiledCamera(self.cfg.front_camera_cfg)
-            self.scene.sensors["front_camera"] = self.front_camera
+        self.left_camera = TiledCamera(self.cfg.left_teleop_camera_cfg)
+        self.scene.sensors["left_camera"] = self.left_camera
+        self.right_camera = TiledCamera(self.cfg.right_teleop_camera_cfg)
+        self.scene.sensors["right_camera"] = self.right_camera
 
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
@@ -299,9 +301,20 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         if self.measure_force:
             self.eef_force = self.eef_contact_sensor.data.net_forces_w.squeeze(1) # (num_envs, 3)
             self.F_ext = torch.cat([self.eef_force, torch.zeros((self.num_envs, 3), device=self.device)], dim=-1) # (num_envs, 6)
+        
+        # visualize rgb
+        self.left_rgb = self.left_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
+        left_rgb_np = self.left_rgb[0].cpu().numpy()
+        left_bgr = cv2.cvtColor(left_rgb_np, cv2.COLOR_RGB2BGR)
 
-        if self.enable_cameras:
-            self.front_rgb = self.front_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
+        cv2.imshow("left view", left_bgr)
+        cv2.waitKey(1) 
+        self.right_rgb = self.right_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
+        right_rgb_np = self.right_rgb[0].cpu().numpy()
+        right_bgr = cv2.cvtColor(right_rgb_np, cv2.COLOR_RGB2BGR)
+
+        cv2.imshow("right view", right_bgr)
+        cv2.waitKey(1)
 
         self.joint_pos = self._robot.data.joint_pos.clone()
         self.joint_vel = self._robot.data.joint_vel.clone()
@@ -748,7 +761,8 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         super()._reset_idx(env_ids)
 
         if self.enable_cameras:
-            self.front_camera.reset(env_ids=env_ids)
+            self.left_camera.reset(env_ids=env_ids)
+            self.right_camera.reset(env_ids=env_ids)
 
         # move to next episode
         self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
@@ -851,7 +865,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             base_fingertip_pos = (base_fingertip_pos + self.scene.env_origins).cpu().numpy().tolist()
             purple_color = [(1, 0, 1, 1)]* len(base_fingertip_pos)
 
-            draw.draw_points(base_fingertip_pos, purple_color, [5]*len(base_fingertip_pos))
+            draw.draw_points(base_fingertip_pos, purple_color, [1]*len(base_fingertip_pos))
 
 
     def load_all_episode_act_pos(self, path, pad=True):
