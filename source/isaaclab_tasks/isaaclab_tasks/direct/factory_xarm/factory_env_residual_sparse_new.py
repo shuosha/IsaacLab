@@ -149,6 +149,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
+        self.rolling_success_rate = 0.0
+        self.ema_alpha = 0.002 # 350 eps half life for 450 ts eps
+
         self.eps_grasp_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.eps_grasp_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.eps_task_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
@@ -499,18 +502,36 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         if not self.teleop_mode:
             self._compute_base_actions()
         self._visualize_markers()
-        # time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
-        time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
+        time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
+        # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
-        # terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.15
+        terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.15
 
-        # if self.cfg_task.name == "peg_insert":
-        #     unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-        #     tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
-        #     terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
-        terminated = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+        if self.cfg_task.name == "peg_insert":
+            unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+            tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
+            terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
 
         done = torch.logical_or(time_out, terminated)
+        s = self.ep_succeeded[done].float()  # shape [n_finished]
+        n = s.numel()
+        if n > 0:
+            alpha = self.ema_alpha
+            one_minus = 1.0 - alpha
+
+            # weights: (1-α)^{n-1}, ..., (1-α)^0
+            exponents = torch.arange(n - 1, -1, -1, device=s.device, dtype=torch.float32)
+            weights = one_minus ** exponents  # shape [n]
+
+            weighted_sum = (weights * s).sum()
+
+            # closed-form EMA update over n new episodes
+            self.rolling_success_rate = (
+                (one_minus ** n) * self.rolling_success_rate + alpha * weighted_sum
+            )
+
+        self.extras["rolling_avg_succ_rate"] = float(self.rolling_success_rate)   
+
         self.first_done = torch.logical_or(self.first_done, done)
 
         return terminated, time_out
@@ -559,9 +580,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
     def _log_factory_metrics(self, rew_dict, curr_successes):
         """Keep track of episode statistics and log rewards."""
         # Only log episode success rates at the end of an episode.
-        if torch.any(self.reset_buf): # NOTE: only if eps reset at same time
-            self.extras["eoe_success_rate"] = torch.count_nonzero(curr_successes) / self.num_envs
-            print(f"End-of-Eps Success Rate: {self.extras['eoe_success_rate'].item()*100:.1f}%")
+        # if torch.any(self.reset_buf): # NOTE: only if eps reset at same time
+        #     self.extras["eoe_success_rate"] = torch.count_nonzero(curr_successes) / self.num_envs
+        #     print(f"End-of-Eps Success Rate: {self.extras['eoe_success_rate'].item()*100:.1f}%")
 
         # Get the time at which an episode first succeeds.
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
