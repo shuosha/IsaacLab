@@ -499,14 +499,16 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         if not self.teleop_mode:
             self._compute_base_actions()
         self._visualize_markers()
-        time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
-        # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
-        terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.15
+        # time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
+        time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
+        print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
+        # terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > 0.15
 
-        if self.cfg_task.name == "peg_insert":
-            unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-            tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
-            terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
+        # if self.cfg_task.name == "peg_insert":
+        #     unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+        #     tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
+        #     terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
+        terminated = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
 
         done = torch.logical_or(time_out, terminated)
         self.first_done = torch.logical_or(self.first_done, done)
@@ -557,8 +559,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
     def _log_factory_metrics(self, rew_dict, curr_successes):
         """Keep track of episode statistics and log rewards."""
         # Only log episode success rates at the end of an episode.
-        if torch.any(self.reset_buf):
-            self.extras["successes"] = torch.count_nonzero(curr_successes) / self.num_envs
+        if torch.any(self.reset_buf): # NOTE: only if eps reset at same time
+            self.extras["eoe_success_rate"] = torch.count_nonzero(curr_successes) / self.num_envs
+            print(f"End-of-Eps Success Rate: {self.extras['eoe_success_rate'].item()*100:.1f}%")
 
         # Get the time at which an episode first succeeds.
         first_success = torch.logical_and(curr_successes, torch.logical_not(self.ep_succeeded))
@@ -991,27 +994,33 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
     def _visualize_markers(self):
         if not self.visualize_markers:
             return
-        if not hasattr(self, 'draw'):
-            from isaacsim.util.debug_draw import _debug_draw
-            self.draw = _debug_draw.acquire_debug_draw_interface()
-        self.draw.clear_lines()
+        try:
+            if not hasattr(self, 'draw'):
+                from isaacsim.util.debug_draw import _debug_draw
+                self.draw = _debug_draw.acquire_debug_draw_interface()
+            self.draw.clear_lines()
 
-        curr_pos_list = (self.fingertip_midpoint_pos + self.scene.env_origins).cpu().numpy().tolist()
-        base_pos_list = (self.base_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
-        env_pos_list = (self.env_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
+            curr_pos_list = (self.fingertip_midpoint_pos + self.scene.env_origins).cpu().numpy().tolist()
+            base_pos_list = (self.base_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
+            env_pos_list = (self.env_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
 
-        sizes = [5] * self.num_envs 
-        red_color = [(1, 0, 0, 1)] * self.num_envs
-        blue_color = [(0, 0, 1, 1)] * self.num_envs
-        green_color = [(0, 1, 0, 1)] * self.num_envs
+            sizes = [5] * self.num_envs 
+            red_color = [(1, 0, 0, 1)] * self.num_envs
+            blue_color = [(0, 0, 1, 1)] * self.num_envs
+            green_color = [(0, 1, 0, 1)] * self.num_envs
 
-        # self.draw.draw_lines(curr_pos_list, base_pos_list, blue_color, sizes)
-        # self.draw.draw_lines(base_pos_list, env_pos_list, red_color, sizes)
-        # self.draw.draw_lines(curr_pos_list, env_pos_list, green_color, sizes)
+            self.draw.draw_lines(curr_pos_list, base_pos_list, blue_color, sizes)
+            self.draw.draw_lines(base_pos_list, env_pos_list, red_color, sizes)
+            self.draw.draw_lines(curr_pos_list, env_pos_list, green_color, sizes)
 
-        self.blue_sphere_marker.visualize(self.base_actions[:, :3] + self.scene.env_origins)
-        self.red_sphere_marker.visualize(self.env_actions[:, :3] + self.scene.env_origins)
-        self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
+        except Exception as e:
+            # if in record mode or headless
+            self.blue_sphere_marker.visualize(self.base_actions[:, :3] + self.scene.env_origins)
+            self.red_sphere_marker.visualize(self.env_actions[:, :3] + self.scene.env_origins)
+            self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
+            
+            # print("Visualization error:", e)
+            pass
 
         if hasattr(self, 'obs_traj') and self.visualize_traj:
             for env_id in range(self.num_envs):

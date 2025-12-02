@@ -1,11 +1,12 @@
-# CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/play.py \
-#     --task Isaac-Factory-Xarm-GearMesh-Residual  --num_envs 1 \
-#     --checkpoint logs/rl_games/FactoryXarm/gear_mesh_residual_v0/nn/FactoryXarm.pth
+if [ "$#" -lt 2 ]; then
+  echo "Usage: $0 <task> <run_name>"
+  echo " "
+  exit 1
+fi
 
-# CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/play.py \
-#     --task Isaac-Factory-Xarm-GearMesh-Residual-NoBase  --num_envs 1 \
-#     --checkpoint logs/rl_games/FactoryXarm/gear_mesh_residual_no_base/nn/FactoryXarm.pth
+task="$1"
+ckpt_path="$2"
 
 CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/play.py \
-    --task Isaac-Factory-Xarm-GearMesh-Residual  --num_envs 1 \
-    --checkpoint logs/rl_games/FactoryXarm/gear_mesh_residual_v1/nn/FactoryXarm.pthw
+    --task Isaac-Factory-Xarm-${task}-Residual-Sparse-New  --num_envs 128 \
+    --checkpoint ${ckpt_path}/nn/FactoryXarm.pth --headless #--enable_cameras
