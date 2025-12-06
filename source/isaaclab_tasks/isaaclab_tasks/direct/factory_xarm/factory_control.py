@@ -278,18 +278,11 @@ def compute_dof_state_admittance(
 
     xdot_ref = xdot_ref + dt * xddot
 
-    # limits
-    # lin_max, ang_max = v_task_limits
-    # xdot_ref[:, 0:3] = torch.clamp(xdot_ref[:, 0:3], -lin_max, lin_max)
-    # xdot_ref[:, 3:6] = torch.clamp(xdot_ref[:, 3:6], -ang_max, ang_max)
-
     # --- damped pseudoinverse
     JT  = jacobian.transpose(1, 2)              # (B,n,6)
     I6  = torch.eye(6, device=device).expand(B, 6, 6)
     J_pinv = torch.bmm(JT, torch.linalg.inv(torch.bmm(jacobian, JT) + (lam**2) * I6))
-
     qd_next = torch.bmm(J_pinv, xdot_ref.unsqueeze(-1)).squeeze(-1)
-    # qd_next = torch.clamp(qd_next, -qd_limit, qd_limit)
 
     q_next  = dof_pos[:, :n] + dt * qd_next
     return q_next, qd_next, xddot, e_task, xdot_ref

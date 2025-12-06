@@ -303,7 +303,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 eef_quat,
                 eef_real_pos,
                 torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(len(eps_idx),1),
-                torch.tensor([[0.0, 0.0, 0.225]], device=env.device).repeat(len(eps_idx),1)
+                torch.tensor([[0.0, 0.0, 0.23]], device=env.device).repeat(len(eps_idx),1)
             )[1]
             actions = torch.cat([eef_sim_pos, eef_quat, gripper_pos], dim=-1)
 
@@ -311,7 +311,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 obs[:,3:7],
                 obs[:,:3],
                 torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(len(eps_idx),1),
-                torch.tensor([[0.0, 0.0, -0.225]], device=env.device).repeat(len(eps_idx),1)
+                torch.tensor([[0.0, 0.0, -0.23]], device=env.device).repeat(len(eps_idx),1)
             )[1]
 
             obs_eef_pos.append(obs_eef.cpu().numpy())

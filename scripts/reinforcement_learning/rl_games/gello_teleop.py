@@ -277,12 +277,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     #   operations such as masking that is used for multi-agent learning by RL-Games.
     use_policy = False
     while simulation_app.is_running():
-        start_time = time.time()
-        # run everything in inference mode
+        t_loop_start = time.time()
+
         with torch.inference_mode():
-            # convert obs to agent format
+            # --- checkpoint A ---
+            t0 = time.time()
+
             obs = agent.obs_to_torch(obs)
-            
+
             qpos = gello_listener.get()
             fk = kin_helper.compute_fk_sapien_links(qpos[:7], [kin_helper.sapien_eef_idx])[0]
             pos = torch.from_numpy(fk[:3, 3]).unsqueeze(0).to(env.device)
@@ -291,63 +293,71 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             gripper = torch.tensor([[qpos[-1] * 1.6]], device=env.device)
 
             pos = torch_utils.tf_combine(
-                quat,
-                pos,
+                quat, pos,
                 torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device),
                 torch.tensor([[0.0, 0.0, 0.17]], device=env.device),
             )[1]
 
             base_state = torch.cat([pos, quat, gripper], dim=-1).to(torch.float32)
 
-            curr_state = obs[:,:8].clone()
-            curr_state[:,:3] += env.unwrapped.scene.env_origins[:, :3]
-            print("Current fingertip pose:", curr_state.cpu().numpy())
-            # vx, vy, vz, vg, stop, reset = keyboard_teleop.get_command()
+            curr_state = obs[:, :8].clone()
+            curr_state[:, :3] += env.unwrapped.scene.env_origins[:, :3]
+
+            # --- checkpoint B ---
+            t1 = time.time()
 
             if key_states["r"]:
                 print("[INFO] Resetting environment.")
                 obs = env.unwrapped._reset_idx(torch.arange(env.unwrapped.num_envs).to(env.device))
-                obs = env.unwrapped._get_observations()
-                obs = obs["policy"]
+                obs = env.unwrapped._get_observations()["policy"]
                 timestep = 0
                 continue
+
             if key_states["p"]:
                 use_policy = not use_policy
                 print(f"[INFO] Toggling policy usage to: {use_policy}")
-                time.sleep(0.5)  # debounce
+                time.sleep(0.5)
 
             env.unwrapped.base_actions = base_state
-            print("Base fingertip pose:", base_state.cpu().numpy())
 
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) * float(use_policy)
 
-            # log data
-            obs_eef_pos.append(obs[:,:3].cpu().numpy())
-            obs_eef_quat.append(obs[:,3:7].cpu().numpy())
+            # store logs
+            obs_eef_pos.append(obs[:, :3].cpu().numpy())
+            obs_eef_quat.append(obs[:, 3:7].cpu().numpy())
+            act_eef_pos.append(actions[:, :3].cpu().numpy())
+            act_eef_quat.append(actions[:, 3:7].cpu().numpy())
 
-            act_eef_pos.append(actions[:,:3].cpu().numpy())
-            act_eef_quat.append(actions[:,3:7].cpu().numpy())
+            # --- checkpoint C ---
+            t2 = time.time()
 
-            # save camera image
-            # img = env.unwrapped.front_rgb[0].cpu().numpy()
-            # img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            # cv2.imwrite(os.path.join(cam_path, f"{timestep:06d}.jpg"), img_bgr)
-
-            # env stepping
+            # env step
             obs, _, dones, _ = env.step(actions)
             timestep += 1
 
-        if args_cli.video:
-            # exit the play loop after recording one video
-            if timestep == args_cli.video_length:
-                break
+            # --- checkpoint D ---
+            t3 = time.time()
 
-        # time delay for real-time evaluation
-        print("freq Hz:", 1.0 / (time.time() - start_time))
-        sleep_time = dt - (time.time() - start_time)
+        # --- print timing ---
+        total = t3 - t_loop_start
+        # print(
+        #     f"[t={t_loop_start:.3f}] "
+        #     f"obs+fk={(t1 - t0)*1000:.2f}ms | "
+        #     f"policy={(t2 - t1)*1000:.2f}ms | "
+        #     f"env.step={(t3 - t2)*1000:.2f}ms | "
+        #     f"loop={total*1000:.2f}ms ({1.0/total:.1f} Hz)"
+        # )
+
+        # stop after one video
+        if args_cli.video and timestep == args_cli.video_length:
+            break
+
+        # try real-time pacing
+        sleep_time = dt - (time.time() - t_loop_start)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
+
 
     # close the simulator
     env.close()
