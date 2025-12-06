@@ -235,29 +235,28 @@ def get_task_space_error(
     return pos_error, rot_error
 
 def compute_dof_state_admittance(
-    cfg,
     dof_pos,
     eef_pos, eef_quat,
     jacobian,
     ctrl_target_eef_pos, 
     ctrl_target_eef_quat,
     dt, device,
-    xdot_ref,                    # (B,6) controller internal state (pass in/out)
-    F_ext=None,                  # (B,6), default zeros
-    Kx=200.0, Dx=None, mx=1.0,
+    xdot_ref,                    # (B,6)
+    F_ext=None,                  # (B,6)
+    Kx=200.0, Dx=None, mx=1.0,   # each: float or (B,)
     Kr=50.0,  Dr=None, mr=0.1,
     lam=1e-2,
     rot_scale=0.25,
-    alpha=1.0
+    alpha=1.0,
 ):
     B, _ = dof_pos.shape
     n = 7
+
     if F_ext is None:
         F_ext = torch.zeros(B, 6, device=device)
+    F_ext = F_ext * alpha
 
-    F_ext = F_ext * alpha  # scale external force input
-
-    # --- task space error (pos + axis-angle)
+    # task-space error
     pos_err, aa_err = get_task_space_error(
         eef_pos, eef_quat,
         ctrl_target_eef_pos, ctrl_target_eef_quat,
@@ -265,26 +264,41 @@ def compute_dof_state_admittance(
     )
     e_task = torch.cat((pos_err, rot_scale * aa_err), dim=1)  # (B,6)
 
-    # --- virtual mass and gains
-    Ma = torch.diag_embed(torch.tensor([mx, mx, mx, mr, mr, mr], device=device).repeat(B, 1))
-    if Dx is None: Dx = 2.0 * math.sqrt(Kx * mx)
-    if Dr is None: Dr = 2.0 * math.sqrt(Kr * mr)
-    K = torch.tensor([Kx, Kx, Kx, Kr, Kr, Kr], device=device).repeat(B, 1)
-    D = torch.tensor([Dx, Dx, Dx, Dr, Dr, Dr], device=device).repeat(B, 1)
+    # per-env scalars (B,)
+    def to_B(x):
+        x = torch.as_tensor(x, device=device, dtype=torch.float32)
+        return x.expand(B) if x.ndim == 0 else x
 
-    # --- admittance law on internal state
+    Kx, mx, Kr, mr = map(to_B, (Kx, mx, Kr, mr))
+    if Dx is None: 
+        Dx = 2.0 * torch.sqrt(Kx * mx)
+    else:          
+        Dx = to_B(Dx)
+    if Dr is None: 
+        Dr = 2.0 * torch.sqrt(Kr * mr)
+    else:          
+        Dr = to_B(Dr)
+
+    lam = to_B(lam)                 # (B,)
+    lam2 = (lam ** 2).view(B, 1, 1) # (B,1,1)
+
+    # build 6D vectors from (B,)
+    K = torch.stack([Kx, Kx, Kx, Kr, Kr, Kr], dim=1)    # (B,6)
+    D = torch.stack([Dx, Dx, Dx, Dr, Dr, Dr], dim=1)    # (B,6)
+    M = torch.stack([mx, mx, mx, mr, mr, mr], dim=1)    # (B,6)
+
+    # admittance update
     F_sd  = K * e_task + D * xdot_ref
-    xddot = torch.linalg.solve(Ma, (F_ext - F_sd))
-
+    xddot = (F_ext - F_sd) / M
     xdot_ref = xdot_ref + dt * xddot
 
-    # --- damped pseudoinverse
-    JT  = jacobian.transpose(1, 2)              # (B,n,6)
+    # damped pseudoinverse
+    JT  = jacobian.transpose(1, 2)          # (B,n,6)
     I6  = torch.eye(6, device=device).expand(B, 6, 6)
-    J_pinv = torch.bmm(JT, torch.linalg.inv(torch.bmm(jacobian, JT) + (lam**2) * I6))
+    J_pinv = torch.bmm(JT, torch.linalg.inv(torch.bmm(jacobian, JT) + lam2 * I6))
     qd_next = torch.bmm(J_pinv, xdot_ref.unsqueeze(-1)).squeeze(-1)
 
-    q_next  = dof_pos[:, :n] + dt * qd_next
+    q_next = dof_pos[:, :n] + dt * qd_next
     return q_next, qd_next, xddot, e_task, xdot_ref
 
 _DEBUG_COUNTER = {"k": 0}

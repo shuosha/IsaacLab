@@ -75,11 +75,11 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
 
         # ctrl params
-        self.Kx = 200.0
-        self.Kr = 50.0
-        self.mx = 0.1
-        self.mr = 0.01
-        self.lam = 1e-2
+        self.Kx = torch.tensor([200.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.Kr = torch.tensor([50.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.mx = torch.tensor([0.1], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.mr = torch.tensor([0.01], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
 
 
     def _set_default_dynamics_parameters(self):
@@ -255,7 +255,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         # print("curr eef:", self.eef_pos)
 
         self.base_actions[:, 0:3] = torch_utils.tf_combine(
-            self.fingertip_midpoint_quat,
+            self.base_actions[:, 3:7],
             self.base_actions[:, 0:3],
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
             self.real_fingertip2eef,
@@ -335,12 +335,15 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
         prev_actions = self.actions.clone()
 
+        # self.blue_sphere_marker.visualize(noisy_held_pos + self.scene.env_origins)
+        # self.red_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
+
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
             "fingertip_pos_rel_held": self.fingertip_midpoint_pos - noisy_held_pos,
             "fingertip_quat": self.fingertip_midpoint_quat,
-            "gripper": self.gripper,
+            "gripper": self.gripper / 1.6,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
@@ -352,7 +355,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
             "fingertip_pos_rel_held": self.fingertip_midpoint_pos - self.held_pos_obs_frame,
             "fingertip_quat": self.fingertip_midpoint_quat,
-            "gripper": self.gripper,
+            "gripper": self.gripper / 1.6,
             "ee_linvel": self.fingertip_midpoint_linvel,
             "ee_angvel": self.fingertip_midpoint_angvel,
             "joint_pos": self.joint_pos[:, 0:7],
@@ -462,21 +465,11 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         ctrl_target_fingertip_midpoint_quat,
         ctrl_target_gripper_dof_pos, # (num_envs, 1)
         ):
-        # if self.episode_length_buf[0] % 400 == 0:
-        #     self.Kx = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * np.random.rand()
-        #     self.Kr = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * np.random.rand()
-        #     self.mx = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * np.random.rand()
-        #     self.mr = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * np.random.rand()
-        #     self.lam = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * np.random.rand()
 
         self.arm_joint_pose_target, self.joint_vel_target, x_acc, _, self.eef_vel = factory_control.compute_dof_state_admittance(
-            cfg=self.cfg,
             dof_pos=self.joint_pos,
-            # dof_vel=self.joint_vel,
             eef_pos=self.fingertip_midpoint_pos,
             eef_quat=self.fingertip_midpoint_quat,
-            # eef_linvel=self.fingertip_midpoint_linvel, # actually eef linvel
-            # eef_angvel=self.fingertip_midpoint_angvel,
             jacobian=self.fingertip_midpoint_jacobian,
             ctrl_target_eef_pos=ctrl_target_fingertip_midpoint_pos,
             ctrl_target_eef_quat=ctrl_target_fingertip_midpoint_quat,
@@ -484,7 +477,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             dt=self.physics_dt,
             F_ext=self.F_ext if self.measure_force else None, # NOTE: external wrench at eef frame
             device=self.device,
-            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=0.25,
+            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=1.0,
         )
 
         self._robot.set_joint_position_target(self.arm_joint_pose_target, joint_ids=self.arm_dof_idx)
@@ -661,13 +654,13 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             task_successes = torch.logical_and(task_successes, first_task_succeeded)
 
         rew_dict = {
-            # "grasp_engaged": grasp_engaged.float(),
-            # "grasp_success": grasp_successes.float(),
+            "grasp_engaged": grasp_engaged.float(),
+            "grasp_success": grasp_successes.float(),
             "task_engaged": task_engaged.float(),
             "task_success": task_successes.float(),
         }
-        self.extras["debug_grasp_engaged"] = grasp_engaged.float().mean()
-        self.extras["debug_grasp_success"] = grasp_successes.float().mean()
+        # self.extras["debug_grasp_engaged"] = grasp_engaged.float().mean()
+        # self.extras["debug_grasp_success"] = grasp_successes.float().mean()
         # print(rew_dict)
 
         rew_buf = torch.zeros_like(rew_dict["task_success"])
@@ -771,6 +764,13 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
         if self.enable_cameras:
             self.front_camera.reset(env_ids=env_ids)
+
+        if self.common_step_counter % self.max_episode_length == 0:
+            self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.mr[env_ids] = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
 
         # move to next episode
         self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
