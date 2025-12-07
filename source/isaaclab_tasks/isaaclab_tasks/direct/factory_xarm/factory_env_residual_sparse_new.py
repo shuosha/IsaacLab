@@ -57,7 +57,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             self.cfg_task.action_data_path_v3, 
             self.num_envs, 
             min_horizon=1, 
-            max_horizon=45, 
+            max_horizon=15, 
             device=self.device, 
             pad=True # type: ignore
         )
@@ -375,6 +375,8 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
+        if not self.teleop_mode:
+            self._compute_base_actions()
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.residual_obs_order + ["prev_actions"])
@@ -419,13 +421,6 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         rot_actions = rot_actions * self.rot_threshold
 
         ctrl_target_fingertip_midpoint_pos = self.base_actions[:, 0:3] + pos_actions
-        # # To speed up learning, never allow the policy to move more than 5cm away from the base.
-        # held_pos_action_frame = self.held_pos_obs_frame + self.init_held_pos_obs_noise
-        # delta_pos = ctrl_target_fingertip_midpoint_pos - held_pos_action_frame
-        # pos_error_clipped = torch.clip(
-        #     delta_pos, -self.cfg.ctrl.pos_action_bounds[0], self.cfg.ctrl.pos_action_bounds[1]
-        # )
-        # ctrl_target_fingertip_midpoint_pos = held_pos_action_frame + pos_error_clipped
 
         # Convert to quat and set rot target
         angle = torch.norm(rot_actions, p=2, dim=-1)
@@ -492,8 +487,6 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         """
         self._compute_intermediate_values(dt=self.physics_dt)
 
-        if not self.teleop_mode:
-            self._compute_base_actions()
         self._visualize_markers()
         time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
         # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
@@ -765,12 +758,11 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         if self.enable_cameras:
             self.front_camera.reset(env_ids=env_ids)
 
-        if self.common_step_counter % self.max_episode_length == 0:
-            self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-            self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-            self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-            self.mr[env_ids] = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-            self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+        self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+        self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+        self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+        self.mr[env_ids] = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+        self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
 
         # move to next episode
         self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
