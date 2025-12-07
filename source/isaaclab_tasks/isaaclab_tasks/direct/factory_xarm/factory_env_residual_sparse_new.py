@@ -23,6 +23,7 @@ from . import factory_control, factory_utils
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
 from .nn_buffer import NearestNeighborBuffer
+import pytorch_kinematics as pk
 
 class FactoryEnvResidualSparseNew(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -69,7 +70,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
         # overwrite cfg
         self.cfg.episode_length_s = self.base_actions_agent.get_max_episode_length() * (self.cfg.sim.dt * self.cfg.decimation)
-        self.max_per_eps_length = self.base_actions_agent.get_max_per_episode_length() # (num_eps, )
+        self.max_per_eps_length = self.base_actions_agent.get_max_per_episode_length() // 2 # (num_eps, )
 
         self.initial_poses = torch.load(self.cfg_task.initial_poses_path_v3) # dict each of shape (tot_eps, dim) # type: ignore
         self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
@@ -80,6 +81,44 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         self.mx = torch.tensor([0.1], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mr = torch.tensor([0.01], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
+
+        # load robot
+        urdf = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/assets/xarm7.urdf"
+        chain = pk.build_chain_from_urdf(open(urdf, mode="rb").read())
+        # chain.print_tree()
+        self.serial_chain = pk.SerialChain(chain, "link7", "link_base")
+
+        self.lim = torch.tensor(chain.get_joint_limits())[:, :7]
+
+    def compute_ik_abs(
+        self,
+        action: torch.Tensor,
+        curr_qpos: torch.Tensor,  # (N, DOF)
+    ):
+        tf = torch.eye(4, device=action.device, dtype=action.dtype).unsqueeze(0).repeat(action.shape[0], 1, 1)  # (N,4,4)
+        tf[:, :3, :3] = torch_utils.quats_to_rot_matrices(action[:, 3:7])
+        tf[:, :3, 3] = action[:, :3]
+
+        rob_tf = pk.Transform3d(matrix=tf.to("cpu"), dtype=action.dtype)
+
+        self.abs_ik = pk.PseudoInverseIK(self.serial_chain, max_iterations=50, num_retries=1,
+            retry_configs=curr_qpos.to("cpu").to(torch.float32),
+            joint_limits=self.lim.T,
+            early_stopping_any_converged=True,
+            early_stopping_no_improvement="all",
+            debug=False,
+            lr=0.2)
+
+        output = self.abs_ik.solve(rob_tf)
+        converged = output.converged    # (G, R) bool
+        solutions = output.solutions    # (G, R, DOF)
+
+        first_conv = converged.float().argmax(dim=1)        # (G,)
+        G, R, DOF = solutions.shape
+        idx = first_conv.view(G, 1, 1).expand(-1, 1, DOF)   # (G, 1, DOF)
+        qpos = solutions.gather(1, idx).squeeze(1).to(action.device)        # (G, DOF)
+
+        return qpos
 
 
     def _set_default_dynamics_parameters(self):
@@ -117,6 +156,10 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         # Held asset.
         self.held_pos_obs_frame = torch.zeros((self.num_envs, 3), device=self.device)
         self.init_held_pos_obs_noise = torch.zeros((self.num_envs, 3), device=self.device)
+
+        # traj geom augmentation
+        self.xy_translation_noise = torch.zeros((self.num_envs, 2), device=self.device)
+        self.yaw_rotation_noise = torch.zeros((self.num_envs, 1), device=self.device)
 
         self.held_center_pos_local = torch.zeros((self.num_envs, 3), device=self.device) # center2held transform
         if self.cfg_task.name == "gear_mesh":
@@ -238,7 +281,18 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
             -self.real_fingertip2eef,
         )[1]
-        self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper / 1.6) # (num_envs, residual_action_dim) at eef
+        real_eef_pos[:, :2] -= self.xy_translation_noise
+        real_eef_quat = self.fingertip_midpoint_quat.clone()
+        real_eef_quat = torch_utils.quat_mul(
+            torch_utils.quat_from_euler_xyz(
+                roll=torch.zeros((self.num_envs,), device=self.device),
+                pitch=torch.zeros((self.num_envs,), device=self.device),
+                yaw=-self.yaw_rotation_noise.squeeze(-1),
+            ),
+            real_eef_quat,
+        )
+
+        self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, real_eef_pos, real_eef_quat, self.gripper / 1.6) # (num_envs, residual_action_dim) at eef
         
         # self.green_sphere_marker.visualize(self.fingertip_midpoint_pos)
         # self.obs_base, self.quat_base, self.gripper_base = self.base_actions_agent.get_closest_obs(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper / 1.6, verbose=True)
@@ -260,6 +314,16 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
             self.real_fingertip2eef,
         )[1]
+
+        self.base_actions[:, :2] += self.xy_translation_noise
+        self.base_actions[:, 3:7] = torch_utils.quat_mul(
+            self.base_actions[:, 3:7],
+            torch_utils.quat_from_euler_xyz(
+                roll=torch.zeros((self.num_envs,), device=self.device),
+                pitch=torch.zeros((self.num_envs,), device=self.device),
+                yaw=self.yaw_rotation_noise.squeeze(-1),
+            )
+        )
 
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
@@ -767,11 +831,6 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         # move to next episode
         self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
 
-        # reset robot
-        self._set_replay_default_pose(joints=self.initial_poses["robot"][env_ids, self.episode_idx[env_ids]], env_ids=env_ids) # compute intermediate values there
-        if not self.teleop_mode:
-            self._compute_base_actions()
-
         # object position noises
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)
         fixed_asset_pos_rand = torch.tensor(self.cfg.obs_rand.fixed_asset_pos, dtype=torch.float32, device=self.device)
@@ -783,25 +842,82 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_rand)
         self.init_held_pos_obs_noise[env_ids] = held_asset_pos_noise
 
+        translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.1
+        self.xy_translation_noise[env_ids] = translation_noise
+
+        yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(15.0)
+        self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
+
+        held_pos = self.initial_poses["held_pos"][env_ids, self.episode_idx[env_ids]] # (num_resets, 3)
+        held_pos[:, :2] += translation_noise
+
+        held_quat = self.initial_poses["held_quat"][env_ids, self.episode_idx[env_ids]]
+        held_quat = torch_utils.quat_mul(
+            held_quat,
+            torch_utils.quat_from_euler_xyz(
+                roll=torch.zeros((len(env_ids),), device=self.device),
+                pitch=torch.zeros((len(env_ids),), device=self.device),
+                yaw=yaw_rotation_noise,
+            )
+        )
+
+        fixed_pos = self.initial_poses["fixed_pos"][env_ids, self.episode_idx[env_ids]]
+        fixed_pos[:, :2] += translation_noise
+
+        fixed_quat = self.initial_poses["fixed_quat"][env_ids, self.episode_idx[env_ids]]
+        fixed_quat = torch_utils.quat_mul(
+            fixed_quat,
+            torch_utils.quat_from_euler_xyz(
+                roll=torch.zeros((len(env_ids),), device=self.device),
+                pitch=torch.zeros((len(env_ids),), device=self.device),
+                yaw=yaw_rotation_noise,
+            ),
+        )
+
         # reset assets
         if self.cfg_task.name == "gear_mesh":
             self._set_assets_state( # NOTE: currently no noise added to actual object positions
-                held_pos=self.initial_poses["gear_pos"][env_ids, self.episode_idx[env_ids]],
-                held_quat=self.initial_poses["gear_quat"][env_ids, self.episode_idx[env_ids]],
-                fixed_pos=self.initial_poses["base_pos"][env_ids, self.episode_idx[env_ids]],
-                fixed_quat=self.initial_poses["base_quat"][env_ids, self.episode_idx[env_ids]],
+                held_pos=held_pos,
+                held_quat=held_quat,
+                fixed_pos=fixed_pos,
+                fixed_quat=fixed_quat,
                 env_ids=env_ids,
             )
         elif self.cfg_task.name == "peg_insert":
             self._set_assets_state( # NOTE: currently no noise added to actual object positions
-                held_pos=self.initial_poses["peg_pos"][env_ids, self.episode_idx[env_ids]],
-                held_quat=self.initial_poses["peg_quat"][env_ids, self.episode_idx[env_ids]],
-                fixed_pos=self.initial_poses["base_pos"][env_ids, self.episode_idx[env_ids]],
-                fixed_quat=self.initial_poses["base_quat"][env_ids, self.episode_idx[env_ids]],
+                held_pos=held_pos,
+                held_quat=held_quat,
+                fixed_pos=fixed_pos,
+                fixed_quat=fixed_quat,
                 env_ids=env_ids,
             )
         else:
             raise NotImplementedError("Task not implemented")
+        
+        # reset robot
+        init_qpos = self.initial_poses["robot"][env_ids, self.episode_idx[env_ids]]
+        init_eef = self.initial_poses["eef"][env_ids, self.episode_idx[env_ids]] # (num_resets, 7)
+        sim_eef = init_eef.clone() # (num_resets, 7)
+        sim_eef[:, 0:3] = torch_utils.tf_combine(
+            sim_eef[:, 3:7],
+            sim_eef[:, 0:3],
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(len(env_ids), 1),
+            self.real_fingertip2eef[env_ids] - self.sim_fingertip2eef[env_ids],
+        )[1]
+        sim_eef[:, :2] += translation_noise
+        sim_eef[:, 3:7] = torch_utils.quat_mul(
+            sim_eef[:, 3:7],
+            torch_utils.quat_from_euler_xyz(
+                roll=torch.zeros((len(env_ids),), device=self.device),
+                pitch=torch.zeros((len(env_ids),), device=self.device),
+                yaw=yaw_rotation_noise,
+            ),
+        )
+        noised_qpos = self.compute_ik_abs(sim_eef[:, :7], init_qpos)
+        self._set_replay_default_pose(joints=noised_qpos, env_ids=env_ids) # compute intermediate values there
+
+        if not self.teleop_mode:
+            self._compute_base_actions()
         
         # Compute fixed_pos_obs_frame
         fixed_tip_pos_local = torch.zeros((len(env_ids), 3), device=self.device)
@@ -1039,7 +1155,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         if hasattr(self, 'obs_traj') and self.visualize_traj:
             for env_id in range(self.num_envs):
                 obs = self.obs_traj[env_id]
+                obs[:, :2] += self.xy_translation_noise[env_id]
                 act = self.act_traj[env_id]
+                act[:, :2] += self.xy_translation_noise[env_id]
                 obs_traj = (obs + self.scene.env_origins[env_id]).cpu().numpy().tolist()
                 yellow_color = [(1, 1, 0, 1)] * len(obs_traj)
 

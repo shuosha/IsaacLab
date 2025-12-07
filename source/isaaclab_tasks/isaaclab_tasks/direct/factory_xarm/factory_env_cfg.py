@@ -88,8 +88,8 @@ t_front2base = front2base[:3, 3].tolist()
 
 @configclass
 class ObsRandCfg:
-    fixed_asset_pos = [0.003, 0.003, 0.003]
-    held_asset_pos = [0.003, 0.003, 0.003]
+    fixed_asset_pos = [0.002, 0.002, 0.002]
+    held_asset_pos = [0.002, 0.002, 0.002]
 
 @configclass
 class BaseActionRandCfg:
