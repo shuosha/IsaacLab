@@ -284,12 +284,12 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         real_eef_pos[:, :2] -= self.xy_translation_noise
         real_eef_quat = self.fingertip_midpoint_quat.clone()
         real_eef_quat = torch_utils.quat_mul(
+            real_eef_quat,
             torch_utils.quat_from_euler_xyz(
                 roll=torch.zeros((self.num_envs,), device=self.device),
                 pitch=torch.zeros((self.num_envs,), device=self.device),
                 yaw=-self.yaw_rotation_noise.squeeze(-1),
             ),
-            real_eef_quat,
         )
 
         self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, real_eef_pos, real_eef_quat, self.gripper / 1.6) # (num_envs, residual_action_dim) at eef
@@ -302,6 +302,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         #     torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
         #     self.real_fingertip2eef,
         # )[1]
+        # self.obs_base[:, :2] += self.xy_translation_noise
         # self.blue_sphere_marker.visualize(self.obs_base)
         # print("gripper base:", self.gripper_base)
         # print("curr gripper: ", self.gripper / 1.6)
@@ -399,8 +400,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
         prev_actions = self.actions.clone()
 
-        # self.blue_sphere_marker.visualize(noisy_held_pos + self.scene.env_origins)
-        # self.red_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
+        # self.red_sphere_marker.visualize(noisy_held_pos + self.scene.env_origins)
+        # self.blue_sphere_marker.visualize(self.base_actions[:,:3] + self.scene.env_origins)
+        # self.green_sphere_marker.visualize(self.env_actions[:,:3] + self.scene.env_origins)
 
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
@@ -508,6 +510,7 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
 
         gripper_action = self.actions[:, 6:7] #* self.gripper_threshold
         ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
+        # ctrl_target_gripper_dof_pos = torch.where(self.base_actions[:, 7:8] > 0.5, 1.0, 0.0) * 1.6
         # if self.cfg_task.name == "peg_insert":
         #     ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=self.cfg_task.close_gripper)
         self.env_actions = torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
@@ -842,10 +845,10 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_rand)
         self.init_held_pos_obs_noise[env_ids] = held_asset_pos_noise
 
-        translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.1
+        translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.05
         self.xy_translation_noise[env_ids] = translation_noise
 
-        yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(15.0)
+        yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(5.0)
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
 
         held_pos = self.initial_poses["held_pos"][env_ids, self.episode_idx[env_ids]] # (num_resets, 3)
@@ -970,6 +973,30 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
                     torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
                 )[1]
                 self.act_traj.append(act_pos)
+
+            for env_id in range(self.num_envs):
+                obs = self.obs_traj[env_id]
+                obs[:, :2] += self.xy_translation_noise[env_id]
+                act = self.act_traj[env_id]
+                act[:, :2] += self.xy_translation_noise[env_id]
+                obs_traj = (obs + self.scene.env_origins[env_id]).cpu().numpy().tolist()
+                yellow_color = [(1, 1, 0, 1)] * len(obs_traj)
+
+                act_traj = (act + self.scene.env_origins[env_id]).cpu().numpy().tolist()
+                purple_color = [(1, 0, 1, 1)] * len(act_traj)
+
+                try: 
+                    if not hasattr(self, 'draw'):
+                        from isaacsim.util.debug_draw import _debug_draw
+                        self.data_vis = _debug_draw.acquire_debug_draw_interface()
+                    self.data_vis.clear_lines()
+
+                    self.data_vis.draw_points(act_traj, purple_color, [5]*len(act_traj))
+                    self.data_vis.draw_points(obs_traj, yellow_color, [5]*len(obs_traj))
+
+                except Exception as e:
+                    print("Visualize data error: ", e)
+                    pass
 
         if self.teleop_mode:
             base_fingertip_pos = self.load_all_episode_act_pos(self.cfg_task.action_data_path_v3)
@@ -1151,20 +1178,3 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             
             # print("Visualization error:", e)
             pass
-
-        if hasattr(self, 'obs_traj') and self.visualize_traj:
-            for env_id in range(self.num_envs):
-                obs = self.obs_traj[env_id]
-                obs[:, :2] += self.xy_translation_noise[env_id]
-                act = self.act_traj[env_id]
-                act[:, :2] += self.xy_translation_noise[env_id]
-                obs_traj = (obs + self.scene.env_origins[env_id]).cpu().numpy().tolist()
-                yellow_color = [(1, 1, 0, 1)] * len(obs_traj)
-
-                act_traj = (act + self.scene.env_origins[env_id]).cpu().numpy().tolist()
-                purple_color = [(1, 0, 1, 1)] * len(act_traj)
-
-                self.draw.draw_points(act_traj, purple_color, [5]*len(act_traj))
-                self.draw.draw_points(obs_traj, yellow_color, [5]*len(obs_traj))
-
-            self.visualize_traj = False
