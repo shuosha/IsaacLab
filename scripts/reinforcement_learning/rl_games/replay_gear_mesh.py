@@ -176,10 +176,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obj_states_path: str = f"{input_path}/obj_states/object_states.npz"
     obj_data = np.load(obj_states_path, allow_pickle=True)
 
-    gear2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
-    gear2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
-    gearbase2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
-    gearbase2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
+    held2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
+    held2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
+    fixed2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
+    fixed2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
 
     robot_states_path: str = f"{input_path}/robot_states/robot_trajectories.npz"
     robot_data = np.load(robot_states_path, allow_pickle=True)
@@ -202,13 +202,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     for i, ep in enumerate(eps_idx):
         eps_idx_key = f"episode_{eps_idx[i]:04d}"
-        gear2base_mat = torch.from_numpy(obj_data[f"{eps_idx_key}"][0]).to(env.device).reshape(4,4)
-        gear2base_pos[i] = gear2base_mat[:3, 3] + torch.tensor([-0.02025, 0.0, 0.0]).to(env.device)
-        gear2base_pos[i][2] = -0.0175
-        gear2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
+        held2base_mat = torch.from_numpy(obj_data[f"{eps_idx_key}"][0]).to(env.device).reshape(4,4)
+        held2base_pos[i] = held2base_mat[:3, 3] + torch.tensor([-0.02025, 0.0, 0.0]).to(env.device)
+        held2base_pos[i][2] = -0.0175
+        held2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
         # NOTE: need formal sys id
-        gearbase2base_pos[i] = torch.tensor([0.3633, -0.096, 0.0]).to(env.device)
-        gearbase2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
+        fixed2base_pos[i] = torch.tensor([0.360819, -0.104133, 0.0]).to(env.device)
+        fixed2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
 
         # --- simple padding: repeat the last valid frame ---
         pos_np   = robot_data[f"{eps_idx_key}/action.eef_pos"]
@@ -239,6 +239,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # import pdb; pdb.set_trace()
 
     real_init_qpos = torch.from_numpy(init_robot_qpos_data).to(env.device)
+    real_init_eef = torch.cat([
+        real_eef_pos_targets[0,:,:],
+        real_quat_targets[0,:,:]
+    ], dim=-1)
     # print("real init qpos:", real_init_qpos.shape, real_init_qpos)
 
     # if save initial states
@@ -246,14 +250,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         init_states_output_path = f"{input_path}/initial_poses"
         os.makedirs(init_states_output_path, exist_ok=True)
         init_poses = {
+            "eef": real_init_eef,  # (num_eps, 7)
             "robot": real_init_qpos, # (num_eps, 7)
-            "gear_pos": gear2base_pos, # (num_eps, 3)
-            "gear_quat": gear2base_quat, # (num_eps, 4)
-            "base_pos": gearbase2base_pos, # (num_eps, 3)
-            "base_quat": gearbase2base_quat, # (num_eps, 4)
+            "held_pos": held2base_pos, # (num_eps, 3)
+            "held_quat": held2base_quat, # (num_eps, 4)
+            "fixed_pos": fixed2base_pos, # (num_eps, 3)
+            "fixed_quat": fixed2base_quat, # (num_eps, 4)
         }
         torch.save(init_poses, os.path.join(init_states_output_path, "initial_poses.pt"))
         print(f"[INFO] Saved initial poses to: {os.path.join(init_states_output_path, 'initial_poses.pt')}")
+        exit()
 
     T = max_ts
     # reset environment
@@ -262,10 +268,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # set to initial pose
     env.unwrapped._set_replay_default_pose(real_init_qpos, env_ids=torch.arange(len(eps_idx), device=env.device))
     env.unwrapped._set_assets_state(
-        held_pos=gear2base_pos, 
-        held_quat=gear2base_quat, 
-        fixed_pos=gearbase2base_pos, 
-        fixed_quat=gearbase2base_quat,
+        held_pos=held2base_pos, 
+        held_quat=held2base_quat, 
+        fixed_pos=fixed2base_pos, 
+        fixed_quat=fixed2base_quat,
         env_ids=torch.arange(len(eps_idx), device=env.device)
     )
     obs = env.unwrapped._get_observations()

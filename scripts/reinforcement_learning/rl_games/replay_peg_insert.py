@@ -241,6 +241,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # import pdb; pdb.set_trace()
 
     real_init_qpos = torch.from_numpy(init_robot_qpos_data).to(env.device)
+    real_init_eef = torch.cat([
+        real_eef_pos_targets[0,:,:],
+        real_quat_targets[0,:,:]
+    ], dim=-1)
     # print("real init qpos:", real_init_qpos.shape, real_init_qpos)
 
     # if save initial states
@@ -248,14 +252,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         init_states_output_path = f"{input_path}/initial_poses"
         os.makedirs(init_states_output_path, exist_ok=True)
         init_poses = {
+            "eef": real_init_eef,  # (num_eps, 7)
             "robot": real_init_qpos, # (num_eps, 7)
-            "peg_pos": held2base_pos, # (num_eps, 3)
-            "peg_quat": held2base_quat, # (num_eps, 4)
-            "base_pos": fixed2base_pos, # (num_eps, 3)
-            "base_quat": fixed2base_quat, # (num_eps, 4)
+            "held_pos": held2base_pos, # (num_eps, 3)
+            "held_quat": held2base_quat, # (num_eps, 4)
+            "fixed_pos": fixed2base_pos, # (num_eps, 3)
+            "fixed_quat": fixed2base_quat, # (num_eps, 4)
         }
         torch.save(init_poses, os.path.join(init_states_output_path, "initial_poses.pt"))
         print(f"[INFO] Saved initial poses to: {os.path.join(init_states_output_path, 'initial_poses.pt')}")
+        exit()
 
     T = max_ts
     # reset environment
@@ -305,7 +311,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 eef_quat,
                 eef_real_pos,
                 torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(len(eps_idx),1),
-                torch.tensor([[0.0, 0.0, 0.225]], device=env.device).repeat(len(eps_idx),1)
+                torch.tensor([[0.0, 0.0, 0.23]], device=env.device).repeat(len(eps_idx),1)
             )[1]
             actions = torch.cat([eef_sim_pos, eef_quat, gripper_pos], dim=-1)
 
@@ -313,7 +319,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 obs[:,3:7],
                 obs[:,:3],
                 torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(len(eps_idx),1),
-                torch.tensor([[0.0, 0.0, -0.225]], device=env.device).repeat(len(eps_idx),1)
+                torch.tensor([[0.0, 0.0, -0.23]], device=env.device).repeat(len(eps_idx),1)
             )[1]
 
             obs_eef_pos.append(obs_eef.cpu().numpy())

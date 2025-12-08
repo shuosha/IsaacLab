@@ -140,7 +140,7 @@ class CtrlCfg:
 class FactoryEnvCfg(DirectRLEnvCfg):
     decimation = 8
     action_space = 6 # TODO: 7 for residual
-    residual_action_space = 7
+    residual_action_space = 6
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72

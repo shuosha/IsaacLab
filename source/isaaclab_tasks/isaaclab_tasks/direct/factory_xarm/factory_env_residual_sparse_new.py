@@ -508,9 +508,9 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
 
-        gripper_action = self.actions[:, 6:7] #* self.gripper_threshold
-        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
-        # ctrl_target_gripper_dof_pos = torch.where(self.base_actions[:, 7:8] > 0.5, 1.0, 0.0) * 1.6
+        # gripper_action = self.actions[:, 6:7] #* self.gripper_threshold
+        # ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
+        ctrl_target_gripper_dof_pos = torch.where(self.base_actions[:, 7:8] > 0.5, 1.0, 0.0) * 1.6
         # if self.cfg_task.name == "peg_insert":
         #     ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=self.cfg_task.close_gripper)
         self.env_actions = torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
@@ -694,10 +694,10 @@ class FactoryEnvResidualSparseNew(DirectRLEnv):
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
         grasp_engaged = torch.where(grasp_dist < 0.04, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
-        if self.cfg_task.name == "peg_insert":
-            close_gripper = torch.where(self.gripper.squeeze(-1) >= 1.57, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-            grasp_successes = torch.logical_and(grasp_successes, close_gripper)
-            grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
+        # if self.cfg_task.name == "peg_insert":
+        #     close_gripper = torch.where(self.gripper.squeeze(-1) >= 1.57, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        #     grasp_successes = torch.logical_and(grasp_successes, close_gripper)
+        #     grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
 
         if self.cfg.sparse_rewards:
             first_grasp_engaged = torch.logical_and(grasp_engaged, torch.logical_not(self.eps_grasp_engaged))
