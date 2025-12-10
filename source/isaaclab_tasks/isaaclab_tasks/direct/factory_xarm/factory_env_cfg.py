@@ -244,7 +244,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=False)
     
     measure_force = False
-    enable_cameras = False
+    enable_cameras = True
     sparse_rewards = False
 
     XARM_USD_PATH = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/assets/xarm7_gripper.usd"

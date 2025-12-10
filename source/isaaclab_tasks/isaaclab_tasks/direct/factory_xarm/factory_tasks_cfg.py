@@ -105,7 +105,7 @@ class PegInsert(FactoryTask):
     action_data_path: str = "logs/data/teleop_peg_insert_9/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
 
     initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/robot_states/robot_trajectories.npy" # NOTE: get this from teleop
+    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 1.575
     
     name = "peg_insert"
@@ -217,7 +217,7 @@ class GearMesh(FactoryTask):
     action_data_path_v2: str = "logs/data/1117_teleop_gear_mesh_20/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
 
     initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/robot_states/robot_trajectories.npy" # NOTE: get this from teleop
+    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
 
     close_gripper: float = 1.18
     name = "gear_mesh"
