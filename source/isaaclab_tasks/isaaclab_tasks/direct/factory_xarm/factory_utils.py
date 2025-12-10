@@ -5,6 +5,7 @@
 
 import numpy as np
 import torch
+import math
 
 import isaacsim.core.utils.torch as torch_utils
 
@@ -70,7 +71,7 @@ def get_held_base_pos_local(task_name, fixed_asset_cfg, num_envs, device):
         held_base_x_offset = gear_base_offset[0]
         held_base_z_offset = gear_base_offset[2]
     elif task_name == "nut_thread":
-        held_base_z_offset = fixed_asset_cfg.base_height
+        held_base_z_offset = -0.01
     else:
         raise NotImplementedError("Task not implemented")
 
@@ -102,10 +103,7 @@ def get_target_held_base_pose(fixed_pos, fixed_quat, task_name, fixed_asset_cfg,
         fixed_success_pos_local[:, 0] = gear_base_offset[0]
         fixed_success_pos_local[:, 2] = gear_base_offset[2]
     elif task_name == "nut_thread":
-        head_height = fixed_asset_cfg.base_height
-        shank_length = fixed_asset_cfg.height
-        thread_pitch = fixed_asset_cfg.thread_pitch
-        fixed_success_pos_local[:, 2] = head_height + shank_length - thread_pitch * 1.5
+        fixed_success_pos_local[:, 2] = 0.04
     else:
         raise NotImplementedError("Task not implemented")
     fixed_success_quat_local = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).unsqueeze(0).repeat(num_envs, 1)
@@ -126,3 +124,42 @@ def collapse_obs_dict(obs_dict, obs_order):
     obs_tensors = [obs_dict[obs_name] for obs_name in obs_order]
     obs_tensors = torch.cat(obs_tensors, dim=-1)
     return obs_tensors
+
+def quat_rotate_x_axis(q: torch.Tensor) -> torch.Tensor:
+    """
+    q: (N,4) quaternions in wxyz
+    returns: (N,3) unit vectors = x-axis of the rotated frame in world coords
+    """
+    # normalize to be safe
+    q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+
+    w, x, y, z = q.unbind(dim=-1)
+
+    # Rotate the x-axis (1,0,0) using closed-form quaternion rotation
+    # v' = q * (0,1,0,0) * q_conj
+    # Resulting vector:
+    vx = 1 - 2*(y*y + z*z)
+    vy = 2*(x*y + w*z)
+    vz = 2*(x*z - w*y)
+
+    v = torch.stack([vx, vy, vz], dim=-1)
+    return v
+
+def x_axis_diff_ge_n_deg(q1: torch.Tensor,
+                         q2: torch.Tensor,
+                         n_deg: float) -> torch.Tensor:
+    """
+    q1, q2: (N,4) quats in wxyz
+    n_deg: float in [0,180]; angle threshold in degrees
+    returns: (N,) bool tensor, True if x axes differ by at least n_deg
+    """
+    v1 = quat_rotate_x_axis(q1)          # (N,3)
+    v2 = quat_rotate_x_axis(q2)          # (N,3)
+
+    # dot between unit vectors
+    dot = (v1 * v2).sum(dim=-1).clamp(-1.0, 1.0)
+
+    angle_rad = torch.arccos(dot)        # (N,)
+    angle_deg = angle_rad * (180.0 / math.pi)
+
+    return angle_deg >= n_deg
