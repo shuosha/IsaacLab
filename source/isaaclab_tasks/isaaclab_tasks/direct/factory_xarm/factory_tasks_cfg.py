@@ -104,8 +104,8 @@ class PegInsert(FactoryTask):
     initial_poses_path: str = "logs/data/teleop_peg_insert_9/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_path: str = "logs/data/teleop_peg_insert_9/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
 
-    initial_poses_path_v3: str = "logs/data/1119_teleop_peg_insert_20/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "logs/data/1119_teleop_peg_insert_20/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/robot_states/robot_trajectories.npy" # NOTE: get this from teleop
     close_gripper: float = 1.575
     
     name = "peg_insert"
@@ -216,8 +216,8 @@ class GearMesh(FactoryTask):
     initial_poses_path_v2: str = "logs/data/1117_teleop_gear_mesh_20/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_path_v2: str = "logs/data/1117_teleop_gear_mesh_20/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
 
-    initial_poses_path_v3: str = "logs/data/1119_teleop_gear_mesh_20/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "logs/data/1119_teleop_gear_mesh_20/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/robot_states/robot_trajectories.npy" # NOTE: get this from teleop
 
     close_gripper: float = 1.18
     name = "gear_mesh"
@@ -387,12 +387,33 @@ class BoltM16(FixedAssetCfg):
     base_height = 0.01
     thread_pitch = 0.002
 
+@configclass
+class NutM32(HeldAssetCfg):
+    usd_path = "logs/assets/urdf/m36_nut/m36_nut_flat.usd"
+    diameter = 0.024
+    height = 0.01
+    mass = 0.03
+    friction = 0.01  # Additive with the nut means friction is (-0.25 + 0.75)/2 = 0.25
+
+
+@configclass
+class BoltM32(FixedAssetCfg):
+    usd_path = "logs/assets/urdf/m36_bolt/m36_bolt_flat.usd"
+    diameter = 0.024
+    height = 0.025
+    base_height = 0.01
+    thread_pitch = 0.002
+
 
 @configclass
 class NutThread(FactoryTask):
     name = "nut_thread"
-    fixed_asset_cfg = BoltM16()
-    held_asset_cfg = NutM16()
+
+    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+
+    fixed_asset_cfg = BoltM32()
+    held_asset_cfg = NutM32()
     asset_size = 16.0
     duration_s = 30.0
 
@@ -455,7 +476,7 @@ class NutThread(FactoryTask):
             usd_path=held_asset_cfg.usd_path,
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=True,
+                disable_gravity=False,
                 max_depenetration_velocity=5.0,
                 linear_damping=0.0,
                 angular_damping=0.0,

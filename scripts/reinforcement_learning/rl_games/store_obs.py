@@ -167,6 +167,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
+    output_path = "logs/residual_offline/gear_mesh_eps0_sim"
+    os.makedirs(output_path, exist_ok=True)
+    cam_path = f"{output_path}/episode_{0:04d}/camera_1/rgb"
+    os.makedirs(cam_path, exist_ok=True)
     # reset environment
     obs = env.reset()
     obs = env.unwrapped._get_observations()
@@ -191,6 +195,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs, _, dones, _ = env.step(actions)
             print("Step:", timestep)
             obs = obs["obs"]
+            
+            img = env.unwrapped.front_rgb[0].cpu().numpy()
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(os.path.join(cam_path, f"{timestep:06d}.jpg"), img_bgr)
             timestep += 1
 
             if timestep >= 300:

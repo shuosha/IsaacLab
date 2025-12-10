@@ -187,6 +187,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
     env.unwrapped.visualize_markers = True # type: ignore
+    env.unwrapped.visualize_traj = True # type: ignore
 
     # reset environment
     obs = env.reset()
