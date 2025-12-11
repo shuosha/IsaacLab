@@ -71,7 +71,7 @@ def get_held_base_pos_local(task_name, fixed_asset_cfg, num_envs, device):
         held_base_x_offset = gear_base_offset[0]
         held_base_z_offset = gear_base_offset[2]
     elif task_name == "nut_thread":
-        held_base_z_offset = -0.01
+        held_base_z_offset = 0.0
     else:
         raise NotImplementedError("Task not implemented")
 

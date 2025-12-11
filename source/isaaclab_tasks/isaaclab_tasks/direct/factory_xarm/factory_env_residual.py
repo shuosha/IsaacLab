@@ -611,7 +611,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "gear_mesh":
             height_threshold = fixed_cfg.height * success_threshold
         elif self.cfg_task.name == "nut_thread":
-            height_threshold = 0.005 # type: ignore
+            height_threshold = 0.01 # type: ignore
         else:
             raise NotImplementedError("Task not implemented")
         is_close_or_below = torch.where(
@@ -671,18 +671,21 @@ class FactoryEnvResidual(DirectRLEnv):
 
         # Relaxed Rewards:
         xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
-        z_disp = torch.abs(held_base_pos[:, 2] - target_held_base_pos[:, 2])
+        z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-        is_centered = torch.where(xy_dist < 0.025, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        xy_threshold = 0.015
+        is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        # self.log(f"xy_dist: {xy_dist.item()}, goal {xy_threshold}")
         if self.cfg_task.name == "gear_mesh":
             height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.2
         elif self.cfg_task.name == "peg_insert":
             height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.5
         elif self.cfg_task.name == "nut_thread":
-            height_threshold = 0.05
+            height_threshold = 0.02
         is_close_or_below = torch.where(
             z_disp < height_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes)
         )
+        # self.log(f"z_disp: {z_disp.item()}, goal {height_threshold}")
         task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         if self.cfg_task.name == "nut_thread":
@@ -698,19 +701,22 @@ class FactoryEnvResidual(DirectRLEnv):
             self.unwrapped_yaw += delta
             self.prev_yaw = curr_yaw
 
-            entering = (~self.screw_mode) & task_successes
+            entering = (~self.screw_mode) & task_engaged
             # latch the starting yaw for these envs
             self.screw_mode[entering] = True
             self.screw_start_yaw[entering] = self.unwrapped_yaw[entering]
 
             # # Optionally: if you leave the screwing pose, you might reset:
-            leaving = self.screw_mode & (~task_successes)
+            leaving = self.screw_mode & (~task_engaged)
             self.screw_mode[leaving] = False   # or keep it true if you want hysteresis
 
-            target_turn = 2.0 * math.pi   # 360 degrees
-            tol = math.radians(25.0)      # say, 10° tolerance
+            # self.log(f"screw mode: {self.screw_mode.item()}")
+
+            target_turn = 1.0 * math.pi   # 180 degrees
+            tol = math.radians(10.0)      # say, 10° tolerance
 
             rotated_amount = torch.abs(self.unwrapped_yaw - self.screw_start_yaw)
+            # self.log(f"rotated amount: {rotated_amount.item() * 180.0 / math.pi } degrees")
             rotated_enough = rotated_amount >= (target_turn - tol)
 
             rotate_successes = self.screw_mode & rotated_enough
@@ -719,21 +725,39 @@ class FactoryEnvResidual(DirectRLEnv):
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
         grasp_engaged = torch.where(grasp_dist < 0.04, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
-        rotated_before_grasp = factory_utils.x_axis_diff_ge_n_deg(held_base_quat, self.fingertip_midpoint_quat, 160.0)
-        grasp_successes = torch.logical_and(grasp_successes, rotated_before_grasp)
-        grasp_engaged = torch.logical_and(grasp_engaged, rotated_before_grasp)
+        if self.cfg_task.name == "nut_thread":
+            rotated_before_grasp = factory_utils.x_axis_diff_ge_n_deg(held_base_quat, self.fingertip_midpoint_quat, 160.0)
+            grasp_successes = torch.logical_and(grasp_successes, rotated_before_grasp)
+            grasp_engaged = torch.logical_and(grasp_engaged, rotated_before_grasp)
 
-        # if self.cfg_task.name == "peg_insert":
-        #     close_gripper = torch.where(self.gripper.squeeze(-1) >= 1.57, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        #     grasp_successes = torch.logical_and(grasp_successes, close_gripper)
-        #     grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
+        action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1) / 10 # meter / 10
+
+        if self.cfg_task.name == "peg_insert":
+            close_gripper = torch.where(self.gripper.squeeze(-1) >= 1.57, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+            grasp_successes = torch.logical_and(grasp_successes, close_gripper)
+            grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
+
+        first_grasp_engaged = torch.logical_and(grasp_engaged, torch.logical_not(self.eps_grasp_engaged))
+        self.eps_grasp_engaged[grasp_engaged] = 1
+        grasp_engaged = torch.logical_and(grasp_engaged, first_grasp_engaged)
+        first_task_engaged = torch.logical_and(task_engaged, torch.logical_not(self.eps_task_engaged))
+        self.eps_task_engaged[task_engaged] = 1
+        task_engaged = torch.logical_and(task_engaged, first_task_engaged)
+        first_grasp_succeeded = torch.logical_and(grasp_successes, torch.logical_not(self.eps_grasp_succeeded))
+        self.eps_grasp_succeeded[grasp_successes] = 1
+        grasp_successes = torch.logical_and(grasp_successes, first_grasp_succeeded)
+        first_task_succeeded = torch.logical_and(task_successes, torch.logical_not(self.eps_task_succeeded))
+        self.eps_task_succeeded[task_successes] = 1
+        task_successes = torch.logical_and(task_successes, first_task_succeeded)
 
         rew_dict = {
+            "action_delta": -action_delta,
             "grasp_engaged": grasp_engaged.float(),
             "grasp_success": grasp_successes.float(),
             "task_engaged": task_engaged.float(),
             "task_success": task_successes.float(),
         }
+        print("Rewards: ", {k: v.mean().item() for k, v in rew_dict.items()})
         if self.cfg_task.name == "nut_thread":
             rew_dict["rotate_success"] = rotate_successes.float()
 
@@ -743,7 +767,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.prev_actions = self.actions.clone()
 
-        self._log_factory_metrics(rew_dict, task_successes)
+        if self.cfg_task.name == "nut_thread":
+            self._log_factory_metrics(rew_dict, rotate_successes)
+        else:
+            self._log_factory_metrics(rew_dict, task_successes)
 
         if self.vis_options["rewards"] == True:
             try:
