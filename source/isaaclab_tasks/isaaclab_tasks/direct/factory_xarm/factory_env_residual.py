@@ -613,7 +613,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "gear_mesh":
             height_threshold = fixed_cfg.height * success_threshold
         elif self.cfg_task.name == "nut_thread":
-            height_threshold = 0.01 # type: ignore
+            height_threshold = success_threshold # type: ignore
         else:
             raise NotImplementedError("Task not implemented")
         is_close_or_below = torch.where(
@@ -654,9 +654,14 @@ class FactoryEnvResidual(DirectRLEnv):
     def _get_rewards(self):
         """Update rewards and compute success statistics."""
         # Get successful and failed envs at current timestep
-        check_rot = self.cfg_task.name == "nut_thread"
-        task_successes = self._get_curr_successes(
-            success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+        # check_rot = self.cfg_task.name == "nut_thread"
+        if self.cfg_task.name != "nut_thread":
+            task_successes = self._get_curr_successes(
+                success_threshold=self.cfg_task.success_threshold, check_rot=False
+            )
+
+        task_engaged = self._get_curr_successes(
+            success_threshold=self.cfg_task.engage_threshold, check_rot=False
         )
 
         held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
@@ -671,24 +676,22 @@ class FactoryEnvResidual(DirectRLEnv):
             self.device,
         )
 
-        # Relaxed Rewards:
-        xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
-        z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
+        # # Relaxed Rewards:
+        # xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
+        # z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-        xy_threshold = 0.015
-        is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        # self.log(f"xy_dist: {xy_dist.item()}, goal {xy_threshold}")
-        if self.cfg_task.name == "gear_mesh":
-            height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.2
-        elif self.cfg_task.name == "peg_insert":
-            height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.5
-        elif self.cfg_task.name == "nut_thread":
-            height_threshold = 0.02
-        is_close_or_below = torch.where(
-            z_disp < height_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes)
-        )
-        # self.log(f"z_disp: {z_disp.item()}, goal {height_threshold}")
-        task_engaged = torch.logical_and(is_centered, is_close_or_below)
+        # xy_threshold = 0.0025
+        # is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        # # self.log(f"xy_dist: {xy_dist.item()}, goal {xy_threshold}")
+        # if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
+        #     height_threshold = self.cfg_task.fixed_asset_cfg.height
+        # elif self.cfg_task.name == "nut_thread":
+        #     height_threshold = 0.02
+        # is_close_or_below = torch.where(
+        #     z_disp < height_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes)
+        # )
+        # # self.log(f"z_disp: {z_disp.item()}, goal {height_threshold}")
+        # task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         if self.cfg_task.name == "nut_thread":
             _, _, curr_yaw = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat)
@@ -714,14 +717,14 @@ class FactoryEnvResidual(DirectRLEnv):
 
             # self.log(f"screw mode: {self.screw_mode.item()}")
 
-            target_turn = 1.0 * math.pi   # 180 degrees
+            target_turn = 0.5 * math.pi   # 180 degrees
             tol = math.radians(10.0)      # say, 10° tolerance
 
             rotated_amount = torch.abs(self.unwrapped_yaw - self.screw_start_yaw)
             # self.log(f"rotated amount: {rotated_amount.item() * 180.0 / math.pi } degrees")
             rotated_enough = rotated_amount >= (target_turn - tol)
 
-            rotate_successes = self.screw_mode & rotated_enough
+            task_successes = self.screw_mode & rotated_enough
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
@@ -768,10 +771,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.prev_actions = self.actions.clone()
 
-        if self.cfg_task.name == "nut_thread":
-            self._log_factory_metrics(rew_dict, rotate_successes)
-        else:
-            self._log_factory_metrics(rew_dict, task_successes)
+        self._log_factory_metrics(rew_dict, task_successes)
 
         if self.vis_options["rewards"] == True:
             try:

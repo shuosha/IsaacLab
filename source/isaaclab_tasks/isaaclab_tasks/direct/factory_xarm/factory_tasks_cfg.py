@@ -409,9 +409,10 @@ class BoltM32(FixedAssetCfg):
 class NutThread(FactoryTask):
     name = "nut_thread"
 
-    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
-
+    initial_poses_path_v3: str = "logs/data/1210_teleop_nut_thread_1/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_path_v3: str = "logs/data/1210_teleop_nut_thread_1/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    close_gripper: float = 0.5
+    
     fixed_asset_cfg = BoltM32()
     held_asset_cfg = NutM32()
     asset_size = 16.0
@@ -442,7 +443,7 @@ class NutThread(FactoryTask):
     keypoint_coef_fine: list = [1500, 0]  # 500, 0
     # Fraction of thread-height.
     success_threshold: float = 0.375
-    engage_threshold: float = 0.5
+    engage_threshold: float = 0.01
     keypoint_scale: float = 0.05
 
     fixed_asset: ArticulationCfg = ArticulationCfg(
