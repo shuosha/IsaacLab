@@ -55,7 +55,7 @@ class FactoryEnvResidual(DirectRLEnv):
             self.cfg_task.action_data_path_v3, 
             self.num_envs, 
             min_horizon=1, 
-            max_horizon=15, 
+            max_horizon=45, 
             device=self.device, 
             pad=True # type: ignore
         )
@@ -550,8 +550,6 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self._visualize_markers()
         time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
-        base_finished = self.base_actions_agent.is_waiting(torch.arange(self.num_envs, device=self.device))
-        time_out |= base_finished
 
         # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
@@ -655,10 +653,9 @@ class FactoryEnvResidual(DirectRLEnv):
         """Update rewards and compute success statistics."""
         # Get successful and failed envs at current timestep
         # check_rot = self.cfg_task.name == "nut_thread"
-        if self.cfg_task.name != "nut_thread":
-            task_successes = self._get_curr_successes(
-                success_threshold=self.cfg_task.success_threshold, check_rot=False
-            )
+        task_successes = self._get_curr_successes(
+            success_threshold=self.cfg_task.success_threshold, check_rot=False
+        )
 
         held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
             self.held_pos, self.held_quat, self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
@@ -684,7 +681,7 @@ class FactoryEnvResidual(DirectRLEnv):
         elif self.cfg_task.name == "peg_insert":
             height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.5
         elif self.cfg_task.name == "nut_thread":
-            height_threshold = 0.02
+            height_threshold = 0.01
         is_close_or_below = torch.where(
             z_disp < height_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes)
         )
