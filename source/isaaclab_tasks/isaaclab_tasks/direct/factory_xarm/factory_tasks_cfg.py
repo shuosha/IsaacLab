@@ -411,7 +411,7 @@ class NutThread(FactoryTask):
 
     initial_poses_path_v3: str = "logs/data/1210_teleop_nut_thread_1/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_path_v3: str = "logs/data/1210_teleop_nut_thread_1/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
-    close_gripper: float = 0.5
+    close_gripper: float = 0.69
     
     fixed_asset_cfg = BoltM32()
     held_asset_cfg = NutM32()
