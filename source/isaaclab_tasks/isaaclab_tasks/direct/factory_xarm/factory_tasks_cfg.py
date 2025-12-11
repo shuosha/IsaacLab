@@ -106,7 +106,7 @@ class PegInsert(FactoryTask):
 
     initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
-    close_gripper: float = 1.575
+    close_gripper: float = 1.57
     
     name = "peg_insert"
     fixed_asset_cfg = Hole8mm()

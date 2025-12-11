@@ -732,10 +732,9 @@ class FactoryEnvResidual(DirectRLEnv):
 
         action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1) / 10 # meter / 10
 
-        if self.cfg_task.name == "peg_insert":
-            close_gripper = torch.where(self.gripper.squeeze(-1) >= 1.57, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-            grasp_successes = torch.logical_and(grasp_successes, close_gripper)
-            grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
+        close_gripper = torch.where(self.gripper.squeeze(-1) >= self.cfg_task.close_gripper, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        grasp_successes = torch.logical_and(grasp_successes, close_gripper)
+        grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
 
         first_grasp_engaged = torch.logical_and(grasp_engaged, torch.logical_not(self.eps_grasp_engaged))
         self.eps_grasp_engaged[grasp_engaged] = 1
