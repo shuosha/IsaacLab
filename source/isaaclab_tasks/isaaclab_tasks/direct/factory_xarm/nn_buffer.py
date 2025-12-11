@@ -62,6 +62,7 @@ class NearestNeighborBuffer:
 
         # Minimum timestep to consider per env when doing NN
         self._nn_tmin = torch.zeros(num_envs, dtype=torch.long, device=self._device)
+        self._current_eidx = torch.zeros(num_envs, dtype=torch.long, device=self._device)
 
         # Max buffer capacity is max_horizon; actual per-env length is sampled later.
         self._horizon_env = torch.full((num_envs,),
@@ -169,6 +170,8 @@ class NearestNeighborBuffer:
                 dtype=torch.long,
                 device=self._device,
             )
+            
+        self._current_eidx[:] = eidx 
 
         refill = (self._q_ptr >= self._q_len)   # (num_envs,)
         if refill.any():
@@ -322,3 +325,20 @@ class NearestNeighborBuffer:
         if return_idx:
             return pos_nn, quat_nn, grip_nn, t0
         return pos_nn, quat_nn, grip_nn
+    
+    def is_waiting(self, env_ids):
+        """
+        Return a boolean tensor of shape (len(env_ids),)
+        indicating whether each env has reached the end of its episode.
+        """
+        env_ids = torch.as_tensor(env_ids, device=self._device, dtype=torch.long)
+
+        # Per-env episode index
+        e = self._current_eidx[env_ids]               # (N,)
+        ep_len = self._lengths[e]                     # (N,)
+
+        # Latest t0 that can still fit a horizon
+        max_valid_t0 = ep_len - self._max_horizon - 1  # (N,)
+
+        # Check
+        return self._nn_tmin[env_ids] >= max_valid_t0

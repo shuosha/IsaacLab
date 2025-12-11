@@ -550,6 +550,8 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self._visualize_markers()
         time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
+        base_finished = self.base_actions_agent.is_waiting(torch.arange(self.num_envs, device=self.device))
+        time_out |= base_finished
 
         # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
