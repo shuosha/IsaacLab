@@ -44,15 +44,12 @@ class FactoryEnvResidual(DirectRLEnv):
         self._set_default_dynamics_parameters()
         self._init_residual_policy_buffers()
 
-        self.verbose = False
-
     def _init_residual_policy_buffers(self):
         """Initialize buffers specific to residual policy."""
-        self.teleop_mode = False
-        self.visualize_markers = False # TODO: dynamic option
-        self.visualize_traj = False
+        self.verbose = self.cfg.env_options.verbose
+        self.teleop_mode = self.cfg.env_options.teleop_mode
 
-        self.first_done = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+        self.vis_options = self.cfg.env_options.vis_options
 
         self.base_actions_agent = NearestNeighborBuffer(
             self.cfg_task.action_data_path_v3, 
@@ -82,7 +79,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.mr = torch.tensor([0.01], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
 
-        # load robot
+        # abs ik for reset
         urdf = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/assets/xarm7.urdf"
         chain = pk.build_chain_from_urdf(open(urdf, mode="rb").read())
         # chain.print_tree()
@@ -233,8 +230,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg) # type: ignore
             self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg) # type: ignore
 
-        self.measure_force = self.cfg.measure_force
-        self.enable_cameras = self.cfg.enable_cameras
+        self.measure_force = self.cfg.env_options.measure_force
+        self.enable_cameras = self.cfg.env_options.enable_cameras
 
         if self.measure_force:
             self.eef_contact_sensor = ContactSensor(self.cfg.eef_contact_sensor_cfg)
@@ -266,17 +263,12 @@ class FactoryEnvResidual(DirectRLEnv):
         cfg.prim_path = "/Visuals/held_asset_marker"
         self.held_asset_marker = VisualizationMarkers(cfg)
 
-        cfg = self.cfg.keypoints_marker_cfg
-        cfg.prim_path = "/Visuals/keypoint_held_marker"
-        self.keypoint_held_marker = VisualizationMarkers(cfg)
-        cfg.prim_path = "/Visuals/keypoint_fixed_marker"
-        self.keypoint_fixed_marker = VisualizationMarkers(cfg)
-        cfg.prim_path = "/Visuals/keypoint_fingertip_marker"
-        self.keypoint_fingertip_marker = VisualizationMarkers(cfg)
 
         self.red_sphere_marker = VisualizationMarkers(self.cfg.red_sphere_cfg)
         self.blue_sphere_marker = VisualizationMarkers(self.cfg.blue_sphere_cfg)
         self.green_sphere_marker = VisualizationMarkers(self.cfg.green_sphere_cfg)
+        self.yellow_sphere_marker = VisualizationMarkers(self.cfg.yellow_sphere_cfg)
+        self.orange_sphere_marker = VisualizationMarkers(self.cfg.orange_sphere_cfg)
 
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
@@ -302,20 +294,15 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, real_eef_pos, real_eef_quat, self.gripper / 1.6) # (num_envs, residual_action_dim) at eef
         
-        # self.green_sphere_marker.visualize(self.fingertip_midpoint_pos)
-        # self.obs_base, self.quat_base, self.gripper_base = self.base_actions_agent.get_closest_obs(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper / 1.6, verbose=True)
-        # self.obs_base = torch_utils.tf_combine( # NOTE: real eef != sim eef
-        #     self.quat_base,
-        #     self.obs_base,
-        #     torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
-        #     self.real_fingertip2eef,
-        # )[1]
-        # self.obs_base[:, :2] += self.xy_translation_noise
-        # self.blue_sphere_marker.visualize(self.obs_base)
-        # print("gripper base:", self.gripper_base)
-        # print("curr gripper: ", self.gripper / 1.6)
-        # print("eps_idx: ", self.episode_idx)
-        # print("curr eef:", self.eef_pos)
+        if self.vis_options["training_data"]:
+            self.obs_base, quat_base, _ = self.base_actions_agent.get_closest_obs(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper / 1.6, verbose=False)
+            self.obs_base = torch_utils.tf_combine( # NOTE: real eef != sim eef
+                quat_base,
+                self.obs_base,
+                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
+                self.real_fingertip2eef,
+            )[1]
+            self.obs_base[:, :2] += self.xy_translation_noise
 
         self.base_actions[:, 0:3] = torch_utils.tf_combine(
             self.base_actions[:, 3:7],
@@ -563,8 +550,6 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self._visualize_markers()
         time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
-        base_finished = self.base_actions_agent.is_waiting(torch.arange(self.num_envs, device=self.device))
-        time_out |= base_finished
 
         # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
@@ -595,8 +580,6 @@ class FactoryEnvResidual(DirectRLEnv):
             )
 
         self.extras["rolling_avg_succ_rate"] = float(self.rolling_success_rate)   
-
-        self.first_done = torch.logical_or(self.first_done, done)
 
         return terminated, time_out
 
@@ -673,11 +656,6 @@ class FactoryEnvResidual(DirectRLEnv):
         task_successes = self._get_curr_successes(
             success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
         )
-        # task_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
-        self.first_done = torch.logical_or(self.first_done, task_successes)
-
-        # print("not yet succeeded eps:", self.episode_idx[torch.logical_not(task_successes)])
-        # print("task successes:", task_successes.sum().item())
 
         held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
             self.held_pos, self.held_quat, self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
@@ -726,8 +704,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self.screw_start_yaw[entering] = self.unwrapped_yaw[entering]
 
             # # Optionally: if you leave the screwing pose, you might reset:
-            # leaving = self.screw_mode & (~task_successes)
-            # self.screw_mode[leaving] = False   # or keep it true if you want hysteresis
+            leaving = self.screw_mode & (~task_successes)
+            self.screw_mode[leaving] = False   # or keep it true if you want hysteresis
 
             target_turn = 2.0 * math.pi   # 360 degrees
             tol = math.radians(25.0)      # say, 10° tolerance
@@ -736,14 +714,6 @@ class FactoryEnvResidual(DirectRLEnv):
             rotated_enough = rotated_amount >= (target_turn - tol)
 
             rotate_successes = self.screw_mode & rotated_enough
-
-        # self.blue_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
-        # self.green_sphere_marker.visualize(target_held_base_pos + self.scene.env_origins)
-        # self.red_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
-
-        # self.held_asset_marker.visualize(held_base_pos + self.scene.env_origins, held_base_quat)
-        # self.fixed_asset_marker.visualize(target_held_base_pos + self.scene.env_origins, target_held_base_quat)
-        # self.fingertip_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins, self.fingertip_midpoint_quat)
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
@@ -758,20 +728,6 @@ class FactoryEnvResidual(DirectRLEnv):
         #     grasp_successes = torch.logical_and(grasp_successes, close_gripper)
         #     grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
 
-        if self.cfg.sparse_rewards:
-            first_grasp_engaged = torch.logical_and(grasp_engaged, torch.logical_not(self.eps_grasp_engaged))
-            self.eps_grasp_engaged[grasp_engaged] = 1
-            grasp_engaged = torch.logical_and(grasp_engaged, first_grasp_engaged)
-            first_task_engaged = torch.logical_and(task_engaged, torch.logical_not(self.eps_task_engaged))
-            self.eps_task_engaged[task_engaged] = 1
-            task_engaged = torch.logical_and(task_engaged, first_task_engaged)
-            first_grasp_succeeded = torch.logical_and(grasp_successes, torch.logical_not(self.eps_grasp_succeeded))
-            self.eps_grasp_succeeded[grasp_successes] = 1
-            grasp_successes = torch.logical_and(grasp_successes, first_grasp_succeeded)
-            first_task_succeeded = torch.logical_and(task_successes, torch.logical_not(self.eps_task_succeeded))
-            self.eps_task_succeeded[task_successes] = 1
-            task_successes = torch.logical_and(task_successes, first_task_succeeded)
-
         rew_dict = {
             "grasp_engaged": grasp_engaged.float(),
             "grasp_success": grasp_successes.float(),
@@ -780,9 +736,6 @@ class FactoryEnvResidual(DirectRLEnv):
         }
         if self.cfg_task.name == "nut_thread":
             rew_dict["rotate_success"] = rotate_successes.float()
-        # self.extras["debug_grasp_engaged"] = grasp_engaged.float().mean()
-        # self.extras["debug_grasp_success"] = grasp_successes.float().mean()
-        # print(rew_dict)
 
         rew_buf = torch.zeros_like(rew_dict["task_success"])
         for rew_name, rew in rew_dict.items():
@@ -791,93 +744,44 @@ class FactoryEnvResidual(DirectRLEnv):
         self.prev_actions = self.actions.clone()
 
         self._log_factory_metrics(rew_dict, task_successes)
+
+        if self.vis_options["rewards"] == True:
+            try:
+                if not hasattr(self, 'draw'):
+                    from isaacsim.util.debug_draw import _debug_draw
+                    self.draw = _debug_draw.acquire_debug_draw_interface()
+                self.draw.clear_lines()
+
+                goal_fixed_pos = (target_held_base_pos + self.scene.env_origins).cpu().numpy().tolist()
+                goal_held_pos = (held_base_pos + self.scene.env_origins).cpu().numpy().tolist()
+
+                grasp_pos = (self.held_pos_obs_frame + self.scene.env_origins).cpu().numpy().tolist()
+                fingertip_pos = (self.fingertip_midpoint_pos + self.scene.env_origins).cpu().numpy().tolist()
+
+                sizes = [10] * self.num_envs 
+                pink_color = [(1.0, 0.75, 0.8, 1.0)] * self.num_envs
+
+                self.draw.draw_lines(goal_fixed_pos, goal_held_pos, pink_color, sizes)
+                self.draw.draw_lines(grasp_pos, fingertip_pos, pink_color, sizes)
+
+                curr_pos_list = (self.fingertip_midpoint_pos + self.scene.env_origins).cpu().numpy().tolist()
+                base_pos_list = (self.base_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
+                env_pos_list = (self.env_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
+
+                sizes = [5] * self.num_envs 
+                red_color = [(1, 0, 0, 1)] * self.num_envs
+                blue_color = [(0, 0, 1, 1)] * self.num_envs
+                green_color = [(0, 1, 0, 1)] * self.num_envs
+
+                self.draw.draw_lines(curr_pos_list, base_pos_list, blue_color, sizes)
+                self.draw.draw_lines(base_pos_list, env_pos_list, red_color, sizes)
+                self.draw.draw_lines(curr_pos_list, env_pos_list, green_color, sizes)
+
+            except Exception as e:
+                print("Vis reward error: ", e)
+                pass
+
         return rew_buf
-
-    def _get_factory_rew_dict(self, curr_successes):
-        """Compute reward terms at current timestep."""
-        rew_dict, rew_scales = {}, {}
-
-        # Compute pos of keypoints on held asset, and fixed asset in world frame
-        held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
-            self.held_pos, self.held_quat, self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
-        )
-        target_held_base_pos, target_held_base_quat = factory_utils.get_target_held_base_pose(
-            self.fixed_pos,
-            self.fixed_quat,
-            self.cfg_task.name,
-            self.cfg_task.fixed_asset_cfg,
-            self.num_envs,
-            self.device,
-        )
-
-        if self.cfg_task.name == "peg_insert":
-            fingertip_pos = torch_utils.tf_combine(
-                self.fingertip_midpoint_quat,
-                self.fingertip_midpoint_pos,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-                torch.tensor([0.0, 0.0, 0.03], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-            )[1]
-        else:
-            fingertip_pos = self.fingertip_midpoint_pos.clone()
-
-        offsets = factory_utils.get_keypoint_offsets(self.cfg_task.num_keypoints, self.device)
-        keypoint_offsets = offsets * self.cfg_task.keypoint_scale
-        for idx, keypoint_offset in enumerate(keypoint_offsets):
-            self.keypoints_held[:, idx] = torch_utils.tf_combine(
-                held_base_quat,
-                held_base_pos,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-                keypoint_offset.repeat(self.num_envs, 1),
-            )[1]
-            self.keypoints_fixed[:, idx] = torch_utils.tf_combine(
-                target_held_base_quat,
-                target_held_base_pos,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-                keypoint_offset.repeat(self.num_envs, 1),
-            )[1]
-            self.keypoints_fingertip[:, self.cfg_task.num_keypoints - idx - 1] = torch_utils.tf_combine(
-                self.fingertip_midpoint_quat,
-                fingertip_pos,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1),
-                keypoint_offset.repeat(self.num_envs, 1),
-            )[1]
-
-        keypoint_dist_objects = torch.norm(self.keypoints_held - self.keypoints_fixed, p=2, dim=-1).mean(-1)
-        keypoint_dist_fingertip = torch.norm(self.keypoints_held - self.keypoints_fingertip, p=2, dim=-1).mean(-1)
-
-        a0, b0 = self.cfg_task.keypoint_coef_baseline
-        a1, b1 = self.cfg_task.keypoint_coef_coarse
-        a2, b2 = self.cfg_task.keypoint_coef_fine
-        # Action penalties.
-        action_penalty_ee = torch.norm(self.actions, p=2)
-        action_grad_penalty = torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
-        curr_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
-
-        rew_dict = {
-            "kp_fingertip_baseline": factory_utils.squashing_fn(keypoint_dist_fingertip, a0, b0),
-            "kp_fingertip_coarse": factory_utils.squashing_fn(keypoint_dist_fingertip, a1, b1),
-            "kp_fingertip_fine": factory_utils.squashing_fn(keypoint_dist_fingertip, a2, b2),
-            "kp_objects_baseline": factory_utils.squashing_fn(keypoint_dist_objects, a0, b0),
-            "kp_objects_coarse": factory_utils.squashing_fn(keypoint_dist_objects, a1, b1),
-            "kp_objects_fine": factory_utils.squashing_fn(keypoint_dist_objects, a2, b2),
-            "action_penalty_ee": action_penalty_ee,
-            "action_grad_penalty": action_grad_penalty,
-            "curr_engaged": curr_engaged.float(),
-            "curr_success": curr_successes.float(),
-        }
-        rew_scales = {
-            "kp_fingertip_baseline": 1.0,
-            "kp_fingertip_coarse": 1.0,
-            "kp_fingertip_fine": 1.0,
-            "kp_objects_baseline": 1.0,
-            "kp_objects_coarse": 1.0,
-            "kp_objects_fine": 1.0,
-            "action_penalty_ee": -self.cfg_task.action_penalty_ee_scale,
-            "action_grad_penalty": -self.cfg_task.action_grad_penalty_scale,
-            "curr_engaged": 1.0,
-            "curr_success": 1.0,
-        }
-        return rew_dict, rew_scales
 
     def _reset_idx(self, env_ids):
         """We assume all envs will always be reset at the same time."""
@@ -1015,7 +919,7 @@ class FactoryEnvResidual(DirectRLEnv):
             self.screw_mode[env_ids]      = False       # not yet in screwing pose
             self.screw_start_yaw[env_ids] = 0.0         # will be set on first entering
 
-        if self.visualize_traj:
+        if self.vis_options["training_data"] == True:
             self.obs_traj = []
             self.act_traj = []
             for env_id in env_ids:
@@ -1048,10 +952,10 @@ class FactoryEnvResidual(DirectRLEnv):
                 purple_color = [(1, 0, 1, 1)] * len(act_traj)
 
                 try: 
-                    if not hasattr(self, 'draw'):
+                    if not hasattr(self, 'data_vis'):
                         from isaacsim.util.debug_draw import _debug_draw
                         self.data_vis = _debug_draw.acquire_debug_draw_interface()
-                    self.data_vis.clear_lines()
+                    self.data_vis.clear_points()
 
                     self.data_vis.draw_points(act_traj, purple_color, [5]*len(act_traj))
                     self.data_vis.draw_points(obs_traj, yellow_color, [5]*len(obs_traj))
@@ -1211,32 +1115,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
 
     def _visualize_markers(self):
-        if not self.visualize_markers:
-            return
-        try:
-            if not hasattr(self, 'draw'):
-                from isaacsim.util.debug_draw import _debug_draw
-                self.draw = _debug_draw.acquire_debug_draw_interface()
-            self.draw.clear_lines()
+        if self.vis_options["object_obs"] == True:
+            self.held_asset_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins, self.held_quat)
+            self.fixed_asset_marker.visualize(self.fixed_pos_obs_frame + self.scene.env_origins, self.fixed_quat)
+            # self.fingertip_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins, self.fingertip_midpoint_quat)
 
-            curr_pos_list = (self.fingertip_midpoint_pos + self.scene.env_origins).cpu().numpy().tolist()
-            base_pos_list = (self.base_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
-            env_pos_list = (self.env_actions[:, :3] + self.scene.env_origins).cpu().numpy().tolist()
-
-            sizes = [5] * self.num_envs 
-            red_color = [(1, 0, 0, 1)] * self.num_envs
-            blue_color = [(0, 0, 1, 1)] * self.num_envs
-            green_color = [(0, 1, 0, 1)] * self.num_envs
-
-            self.draw.draw_lines(curr_pos_list, base_pos_list, blue_color, sizes)
-            self.draw.draw_lines(base_pos_list, env_pos_list, red_color, sizes)
-            self.draw.draw_lines(curr_pos_list, env_pos_list, green_color, sizes)
-
-        except Exception as e:
-            # if in record mode or headless
-            self.blue_sphere_marker.visualize(self.base_actions[:, :3] + self.scene.env_origins)
-            self.red_sphere_marker.visualize(self.env_actions[:, :3] + self.scene.env_origins)
-            self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
-            
-            # print("Visualization error:", e)
-            pass
+        if self.vis_options["training_data"] == True:
+            self.orange_sphere_marker.visualize(self.obs_base + self.scene.env_origins)

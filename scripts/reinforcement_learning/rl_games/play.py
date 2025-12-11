@@ -96,6 +96,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.env_options.vis_options = {
+        "action_goals": True,      # red, blue, green triangle
+        "training_data": True,     # yellow + purple
+        "rewards": True,           # pink circles/shapes
+        "object_obs": False,        # coordinate frames
+    }
+    env_cfg.env_options.verbose = True
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -186,8 +193,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent.reset()
 
     dt = env.unwrapped.step_dt
-    env.unwrapped.visualize_markers = True # type: ignore
-    env.unwrapped.visualize_traj = True # type: ignore
 
     # reset environment
     obs = env.reset()
@@ -210,7 +215,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # convert obs to agent format
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) * 0 
             # env stepping
             obs, _, dones, _ = env.step(actions)
 

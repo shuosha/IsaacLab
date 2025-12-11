@@ -96,6 +96,21 @@ class BaseActionRandCfg:
     horizon = [7, 30]
 
 @configclass
+class EnvOptionsCfg:
+    measure_force = False
+    enable_cameras = False
+    
+    verbose = False
+
+    vis_options = {
+        "action_goals": False,      # red, blue, green triangle
+        "training_data": False,     # yellow + purple
+        "rewards": False,           # pink circles/shapes
+        "object_obs": False,        # coordinate frames
+    }
+    teleop_mode = False
+
+@configclass
 class CtrlCfg:
     ema_factor = 0.2
 
@@ -217,6 +232,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     obs_rand: ObsRandCfg = ObsRandCfg()
     ctrl: CtrlCfg = CtrlCfg()
     base_rand: BaseActionRandCfg = BaseActionRandCfg()
+    env_options: EnvOptionsCfg = EnvOptionsCfg()
 
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(
@@ -242,17 +258,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     )
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=False)
-    
-    measure_force = False
-    enable_cameras = False
-    sparse_rewards = False
 
     XARM_USD_PATH = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/assets/xarm7_gripper.usd"
     robot: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/robot",
         spawn=sim_utils.UsdFileCfg(
             usd_path=XARM_USD_PATH,
-            activate_contact_sensors=measure_force,
+            activate_contact_sensors=env_options.measure_force,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,
                 max_depenetration_velocity=5.0,
@@ -305,8 +317,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 joint_names_expr=["gripper"], 
                 # effort_limit_sim=40.0,
                 # velocity_limit_sim=0.04,
-                stiffness=5.0, # 5
-                damping=0.0, #0.0
+                stiffness=7500.0, # 5
+                damping=173.0, #0.0
             ),
         },
     )
@@ -420,6 +432,25 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         }
     )
 
+    yellow_sphere_cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/yellow_sphere_marker",
+        markers={
+            "sphere": sim_utils.SphereCfg(
+                radius=0.004,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0)),
+            )
+        }
+    )
+
+    orange_sphere_cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/orange_sphere_marker",
+        markers={
+            "sphere": sim_utils.SphereCfg(
+                radius=0.004,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.5, 0.0)),
+            )
+        }
+    )
 
 @configclass
 class FactoryTaskPegInsertCfg(FactoryEnvCfg):
