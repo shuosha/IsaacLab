@@ -751,12 +751,12 @@ class FactoryEnvResidual(DirectRLEnv):
 
         rew_dict = {
             "action_delta": -action_delta,
-            "grasp_engaged": grasp_engaged.float(),
+            # "grasp_engaged": grasp_engaged.float(),
             "grasp_success": grasp_successes.float(),
             "task_engaged": task_engaged.float(),
             "task_success": task_successes.float(),
         }
-        print("Rewards: ", {k: v.mean().item() for k, v in rew_dict.items()})
+        # print("Rewards: ", {k: v.mean().item() for k, v in rew_dict.items()})
         if self.cfg_task.name == "nut_thread":
             rew_dict["rotate_success"] = rotate_successes.float()
 
