@@ -101,6 +101,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "training_data": True,     # yellow + purple
         "rewards": True,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
+        "failed_envs": True,      # red tint
     }
     env_cfg.env_options.verbose = True
 
@@ -215,7 +216,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # convert obs to agent format
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) * 0 
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
             obs, _, dones, _ = env.step(actions)
 

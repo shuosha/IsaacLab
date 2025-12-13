@@ -87,10 +87,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.lim = torch.tensor(chain.get_joint_limits())[:, :7]
 
-        self.prev_yaw        = torch.zeros(self.num_envs, device=self.device)
-        self.unwrapped_yaw   = torch.zeros(self.num_envs, device=self.device)
-        self.screw_mode      = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        self.screw_start_yaw = torch.zeros(self.num_envs, device=self.device)
+        # Held asset yaw rotation tracking (only for nut_thread task, only when task-engaged)
+        if self.cfg_task.name == "nut_thread":
+            self.prev_held_yaw = torch.zeros(self.num_envs, device=self.device)
+            self.cumulative_rotation = torch.zeros(self.num_envs, device=self.device)  # cumulative yaw rotation in degrees
 
     def compute_ik_abs(
         self,
@@ -553,7 +553,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
-        dist_threshold = 0.3 if self.cfg_task.name == "nut_thread" else 0.15
+        dist_threshold = 0.15
         terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold
 
         if self.cfg_task.name == "peg_insert":
@@ -583,7 +583,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         return terminated, time_out
 
-    def _get_curr_successes(self, success_threshold, check_rot=False):
+    def _get_curr_successes(self, success_threshold):
         """Get success mask at current timestep."""
         curr_successes = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
 
@@ -619,12 +619,6 @@ class FactoryEnvResidual(DirectRLEnv):
         )
         curr_successes = torch.logical_and(is_centered, is_close_or_below)
 
-        if check_rot:
-            _, _, curr_yaw = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat)
-            curr_yaw = factory_utils.wrap_yaw(curr_yaw)
-            is_rotated = curr_yaw < self.cfg_task.ee_success_yaw
-            curr_successes = torch.logical_and(curr_successes, is_rotated)
-
         return curr_successes
 
     def _log_factory_metrics(self, rew_dict, curr_successes):
@@ -652,9 +646,8 @@ class FactoryEnvResidual(DirectRLEnv):
     def _get_rewards(self):
         """Update rewards and compute success statistics."""
         # Get successful and failed envs at current timestep
-        # check_rot = self.cfg_task.name == "nut_thread"
         task_successes = self._get_curr_successes(
-            success_threshold=self.cfg_task.success_threshold, check_rot=False
+            success_threshold=self.cfg_task.success_threshold
         )
 
         held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
@@ -675,7 +668,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         xy_threshold = 0.015
         is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        # self.log(f"xy_dist: {xy_dist.item()}, goal {xy_threshold}")
+
         if self.cfg_task.name == "gear_mesh":
             height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.2
         elif self.cfg_task.name == "peg_insert":
@@ -685,57 +678,48 @@ class FactoryEnvResidual(DirectRLEnv):
         is_close_or_below = torch.where(
             z_disp < height_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes)
         )
-        # self.log(f"z_disp: {z_disp.item()}, goal {height_threshold}")
+        self.log(f"xy_dist: {xy_dist.mean().item():.4f}, goal {xy_threshold}")
+        self.log(f"z_disp: {z_disp.mean().item():.4f}, goal {height_threshold}")
         task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         close_gripper = torch.where(self.gripper.squeeze(-1) >= self.cfg_task.close_gripper, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
+        # Track held asset yaw rotation only for nut_thread task, only when task-engaged
         if self.cfg_task.name == "nut_thread":
-            _, _, curr_yaw = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat)
-            # Wrap to [-pi, pi] (generic helper)
-            curr_yaw = (curr_yaw + math.pi) % (2 * math.pi) - math.pi
-
-            # Compute smallest signed delta between prev and current
-            delta = curr_yaw - self.prev_yaw
-            delta = (delta + math.pi) % (2 * math.pi) - math.pi  # wrap delta to [-pi, pi]
-
-            # Accumulate
-            self.unwrapped_yaw += delta
-            self.prev_yaw = curr_yaw
-
-            entering = (~self.screw_mode) & task_engaged
-            # latch the starting yaw for these envs
-            self.screw_mode[entering] = True
-            self.screw_start_yaw[entering] = self.unwrapped_yaw[entering]
-
-            # # Optionally: if you leave the screwing pose, you might reset:
-            leaving = self.screw_mode & (~task_engaged)
-            self.screw_mode[leaving] = False   # or keep it true if you want hysteresis
-
-            # self.log(f"screw mode: {self.screw_mode.item()}")
-
-            target_turn = 0.5 * math.pi   # 180 degrees
-            tol = math.radians(10.0)      # say, 10° tolerance
-
-            rotated_amount = torch.abs(self.unwrapped_yaw - self.screw_start_yaw)
-            # self.log(f"rotated amount: {rotated_amount.item() * 180.0 / math.pi } degrees")
-            rotated_enough = rotated_amount >= (target_turn - tol)
-
-            task_successes = self.screw_mode & rotated_enough
+            # Extract yaw from held asset quaternion
+            _, _, curr_held_yaw = torch_utils.get_euler_xyz(self.held_quat)
+            curr_held_yaw = (curr_held_yaw + math.pi) % (2 * math.pi) - math.pi  # wrap to [-pi, pi]
+            
+            # Compute smallest signed delta between prev and current yaw
+            yaw_delta = curr_held_yaw - self.prev_held_yaw
+            yaw_delta = (yaw_delta + math.pi) % (2 * math.pi) - math.pi  # wrap delta to [-pi, pi]
+            yaw_delta_deg = yaw_delta * 180.0 / math.pi
+            
+            # Only accumulate yaw rotation when task_engaged
+            self.cumulative_rotation[task_engaged] += torch.abs(yaw_delta_deg[task_engaged])
+            
+            # Always update previous yaw to avoid jumps when task_engaged becomes True again
+            self.prev_held_yaw = curr_held_yaw.clone()
+            
+            # Compute rotation reward: 1 if rotation >= 90°
+            task_successes = torch.where(
+                self.cumulative_rotation >= 90.0,
+                torch.ones_like(task_successes), torch.zeros_like(task_successes)
+            )
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
         grasp_engaged = torch.where(grasp_dist < 0.04, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
-        if self.cfg_task.name == "nut_thread":
-            rotated_before_grasp = factory_utils.x_axis_diff_ge_n_deg(held_base_quat, self.fingertip_midpoint_quat, 160.0)
-            grasp_successes = torch.logical_and(grasp_successes, rotated_before_grasp)
-            grasp_engaged = torch.logical_and(grasp_engaged, rotated_before_grasp)
-
         action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1) / 10 # meter / 10
 
         grasp_successes = torch.logical_and(grasp_successes, close_gripper)
         grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
+
+        self.log(f"Grasp engaged: {grasp_engaged.float().mean().item():.3f}")
+        self.log(f"Grasp success: {grasp_successes.float().mean().item():.3f}")
+        self.log(f"Task engaged: {task_engaged.float().mean().item():.3f}")
+        self.log(f"Task success: {task_successes.float().mean().item():.3f}")
 
         first_grasp_engaged = torch.logical_and(grasp_engaged, torch.logical_not(self.eps_grasp_engaged))
         self.eps_grasp_engaged[grasp_engaged] = 1
@@ -749,6 +733,15 @@ class FactoryEnvResidual(DirectRLEnv):
         first_task_succeeded = torch.logical_and(task_successes, torch.logical_not(self.eps_task_succeeded))
         self.eps_task_succeeded[task_successes] = 1
         task_successes = torch.logical_and(task_successes, first_task_succeeded)
+
+        # Visualize failed envs with red sphere markers
+        failed_envs = ~task_successes
+        if failed_envs.any() and self.vis_options["failed_envs"] == True:
+            failed_positions = torch.tensor([0.5, 0.5, 0.5], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+            failed_positions = failed_positions + self.scene.env_origins
+            # Only visualize positions for failed envs
+            failed_positions[~failed_envs] = torch.tensor([0.0, 0.0, -10.0], device=self.device)  # Move successful envs off-screen
+            self.red_sphere_marker.visualize(failed_positions)
 
         rew_dict = {
             "action_delta": -action_delta,
@@ -801,6 +794,8 @@ class FactoryEnvResidual(DirectRLEnv):
             except Exception as e:
                 print("Vis reward error: ", e)
                 pass
+
+            self.log("==============================")
 
         return rew_buf
 
@@ -928,17 +923,12 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.base_actions_agent.clear(env_ids)
 
+        # Reset held asset yaw rotation tracking (only for nut_thread task)
         if self.cfg_task.name == "nut_thread":
-            # 1) Get the current yaw at the new initial pose
-            _, _, yaw0 = torch_utils.get_euler_xyz(self.fingertip_midpoint_quat[env_ids])
-            # Wrap to [-pi, pi] to be consistent with the step update
-            yaw0 = (yaw0 + math.pi) % (2 * math.pi) - math.pi
-
-            # 2) Initialize yaw tracking
-            self.prev_yaw[env_ids]        = yaw0        # so first delta after reset is ~0
-            self.unwrapped_yaw[env_ids]   = 0.0         # start counting from 0
-            self.screw_mode[env_ids]      = False       # not yet in screwing pose
-            self.screw_start_yaw[env_ids] = 0.0         # will be set on first entering
+            _, _, held_yaw0 = torch_utils.get_euler_xyz(self.held_quat[env_ids])
+            held_yaw0 = (held_yaw0 + math.pi) % (2 * math.pi) - math.pi  # wrap to [-pi, pi]
+            self.prev_held_yaw[env_ids] = held_yaw0
+            self.cumulative_rotation[env_ids] = 0.0
 
         if self.vis_options["training_data"] == True:
             self.obs_traj = []
@@ -996,7 +986,6 @@ class FactoryEnvResidual(DirectRLEnv):
             purple_color = [(1, 0, 1, 1)]* len(base_fingertip_pos)
 
             draw.draw_points(base_fingertip_pos, purple_color, [5]*len(base_fingertip_pos))
-
 
     def load_all_episode_act_pos(self, path, pad=True):
         """
@@ -1132,7 +1121,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
     def log(self, string):
         if self.verbose:
-            print(f"== {string} ==")
+            print(f"{string}")
 
 
     def _visualize_markers(self):

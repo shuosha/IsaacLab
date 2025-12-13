@@ -409,8 +409,8 @@ class BoltM32(FixedAssetCfg):
 class NutThread(FactoryTask):
     name = "nut_thread"
 
-    initial_poses_path_v3: str = "logs/data/1210_teleop_nut_thread_1/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "logs/data/1210_teleop_nut_thread_1/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 0.69
     
     fixed_asset_cfg = BoltM32()

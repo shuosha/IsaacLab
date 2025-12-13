@@ -107,6 +107,7 @@ class EnvOptionsCfg:
         "training_data": False,     # yellow + purple
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
+        "failed_envs": False,      # red wireframes
     }
     teleop_mode = False
 

@@ -109,7 +109,7 @@ class FactoryEnvReplay(DirectRLEnv):
             self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg) # type: ignore
             self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg) # type: ignore
 
-        self.measure_force = self.cfg.measure_force
+        self.measure_force = self.cfg.env_options.measure_force
         self.enable_cameras = True
 
         if self.measure_force:
