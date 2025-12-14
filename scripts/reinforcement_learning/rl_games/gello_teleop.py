@@ -145,6 +145,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.teleop_mode = True
+    env_cfg.visualize_markers = True
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -246,8 +248,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     kin_helper = KinHelper(robot_name="xarm7")
 
     # set to initial pose
-    env.unwrapped.teleop_mode = True
-    env.unwrapped.visualize_markers = True
     obs = env.unwrapped._get_observations()
     obs = obs["policy"]
 

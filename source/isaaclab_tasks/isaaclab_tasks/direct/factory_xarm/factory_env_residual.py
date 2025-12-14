@@ -701,9 +701,9 @@ class FactoryEnvResidual(DirectRLEnv):
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
             self.prev_held_yaw = curr_held_yaw.clone()
             
-            # Compute rotation reward: 1 if rotation >= 90°
+            # Compute rotation reward: 1 if rotation >= 180°
             task_successes = torch.where(
-                self.cumulative_rotation >= 90.0,
+                self.cumulative_rotation >= 180.0,
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 

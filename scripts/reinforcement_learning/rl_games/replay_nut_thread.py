@@ -20,7 +20,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=7, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=10, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
@@ -167,12 +167,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
-    input_path = "logs/data/1209_teleop_nut_thread_7"
+    input_path = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread"
     output_path = input_path
 
     # load traj & object data
-    eps_idx = list(range(7))
-    assert env.unwrapped.num_envs == len(eps_idx), "Number of envs must match number of trajs to replay."
+    eps_idx = list(range(args_cli.num_envs))
     obj_states_path: str = f"{input_path}/obj_states/object_states.npz"
     obj_data = np.load(obj_states_path, allow_pickle=True)
 
@@ -262,6 +261,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         }
         torch.save(init_poses, os.path.join(init_states_output_path, "initial_poses.pt"))
         print(f"[INFO] Saved initial poses to: {os.path.join(init_states_output_path, 'initial_poses.pt')}")
+        simulation_app.close()
+
+        exit()
 
     T = max_ts
     # reset environment

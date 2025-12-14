@@ -12,5 +12,5 @@ time="$(date +%Y-%m-%d_%H-%M-%S)"
 
 CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/train.py \
     --task Isaac-Factory-Xarm-NutThread-Residual --num_envs 128 \
-    --track --wandb-project-name FactoryXarm --wandb-name ${time}_nutthread_dmr5_no_grip --wandb-entity ss7050-columbia \
-    agent.params.config.full_experiment_name=${time}_nutthread_dmr5_no_grip
+    --track --wandb-project-name FactoryXarm --wandb-name ${time}_nutthread_dmr5_no_grip_simple_nn --wandb-entity ss7050-columbia \
+    agent.params.config.full_experiment_name=${time}_nutthread_dmr5_no_grip_simple_nn

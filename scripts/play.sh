@@ -8,5 +8,5 @@ task="$1"
 ckpt_path="$2"
 
 CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/play.py \
-    --task Isaac-Factory-Xarm-${task}-Residual-Sparse-New  --num_envs 128 \
-    --checkpoint ${ckpt_path}/nn/FactoryXarm.pth --headless #--enable_cameras
+    --task Isaac-Factory-Xarm-${task}-Residual --num_envs 1 \
+    --checkpoint ${ckpt_path}/nn/FactoryXarm.pth
