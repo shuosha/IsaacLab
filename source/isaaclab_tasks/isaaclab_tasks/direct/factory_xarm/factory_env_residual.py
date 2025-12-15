@@ -682,6 +682,9 @@ class FactoryEnvResidual(DirectRLEnv):
         self.log(f"z_disp: {z_disp.mean().item():.4f}, goal {height_threshold}")
         task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
+        grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
+        grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        grasp_engaged = torch.where(grasp_dist < 0.04, torch.ones_like(task_successes), torch.zeros_like(task_successes))
         close_gripper = torch.where(self.gripper.squeeze(-1) >= self.cfg_task.close_gripper, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
         # Track held asset yaw rotation only for nut_thread task, only when task-engaged
@@ -696,7 +699,8 @@ class FactoryEnvResidual(DirectRLEnv):
             yaw_delta_deg = yaw_delta * 180.0 / math.pi
             
             # Only accumulate yaw rotation when task_engaged
-            self.cumulative_rotation[task_engaged] += torch.abs(yaw_delta_deg[task_engaged])
+            acc_condition = torch.logical_or(task_engaged, grasp_successes)
+            self.cumulative_rotation[acc_condition] += torch.abs(yaw_delta_deg[acc_condition])
             
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
             self.prev_held_yaw = curr_held_yaw.clone()
@@ -706,10 +710,6 @@ class FactoryEnvResidual(DirectRLEnv):
                 self.cumulative_rotation >= 180.0,
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
-
-        grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
-        grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        grasp_engaged = torch.where(grasp_dist < 0.04, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
         action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1) / 10 # meter / 10
 
