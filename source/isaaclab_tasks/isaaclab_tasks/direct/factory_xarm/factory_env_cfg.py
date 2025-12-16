@@ -97,7 +97,7 @@ class BaseActionRandCfg:
 
 @configclass
 class EnvOptionsCfg:
-    measure_force = False
+    measure_force = True
     enable_cameras = False
     
     verbose = False
@@ -318,8 +318,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 joint_names_expr=["gripper"], 
                 # effort_limit_sim=40.0,
                 # velocity_limit_sim=0.04,
-                stiffness=5.0, # 5
-                damping=0.0, #0.0
+                stiffness=7500.0, # 5
+                damping=173.0, #0.0
             ),
         },
     )
