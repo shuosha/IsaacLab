@@ -66,8 +66,8 @@ class FactoryEnvResidual(DirectRLEnv):
         # self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
 
         # overwrite cfg
-        self.cfg.episode_length_s = self.base_actions_agent.get_max_episode_length() * (self.cfg.sim.dt * self.cfg.decimation)
-        self.max_per_eps_length = self.base_actions_agent.get_max_per_episode_length() # (num_eps, )
+        # self.cfg.episode_length_s = self.base_actions_agent.get_max_episode_length() * (self.cfg.sim.dt * self.cfg.decimation)
+        # self.max_per_eps_length = self.base_actions_agent.get_max_per_episode_length() # (num_eps, )
 
         self.initial_poses = torch.load(self.cfg_task.initial_poses_path_v3) # dict each of shape (tot_eps, dim) # type: ignore
         self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
@@ -200,7 +200,6 @@ class FactoryEnvResidual(DirectRLEnv):
         self.rolling_success_rate = 0.0
         self.ema_alpha = 0.002 # 350 eps half life for 450 ts eps
 
-        self.eps_grasp_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.eps_grasp_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.eps_task_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.eps_task_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
@@ -451,7 +450,6 @@ class FactoryEnvResidual(DirectRLEnv):
         """Reset buffers."""
         self.ep_succeeded[env_ids] = 0
         self.ep_success_times[env_ids] = 0
-        self.eps_grasp_engaged[env_ids] = 0
         self.eps_grasp_succeeded[env_ids] = 0
         self.eps_task_engaged[env_ids] = 0
         self.eps_task_succeeded[env_ids] = 0
@@ -550,9 +548,9 @@ class FactoryEnvResidual(DirectRLEnv):
         self._compute_intermediate_values(dt=self.physics_dt)
 
         self._visualize_markers()
-        time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
+        # time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
 
-        # time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
+        time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
         dist_threshold = 0.15
         terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold
@@ -686,7 +684,6 @@ class FactoryEnvResidual(DirectRLEnv):
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
         grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        grasp_engaged = torch.where(grasp_dist < 0.04, torch.ones_like(task_successes), torch.zeros_like(task_successes))
         close_gripper = torch.where(self.gripper.squeeze(-1) >= self.cfg_task.close_gripper, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
         # Track held asset yaw rotation only for nut_thread task, only when task-engaged
@@ -716,16 +713,12 @@ class FactoryEnvResidual(DirectRLEnv):
         action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1) / 10 # meter / 10
 
         grasp_successes = torch.logical_and(grasp_successes, close_gripper)
-        grasp_engaged = torch.logical_and(grasp_engaged, close_gripper)
-
-        self.log(f"Grasp engaged: {grasp_engaged.float().mean().item():.3f}")
+        if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
+            task_successes = torch.logical_and(task_successes, grasp_successes)
         self.log(f"Grasp success: {grasp_successes.float().mean().item():.3f}")
         self.log(f"Task engaged: {task_engaged.float().mean().item():.3f}")
         self.log(f"Task success: {task_successes.float().mean().item():.3f}")
 
-        first_grasp_engaged = torch.logical_and(grasp_engaged, torch.logical_not(self.eps_grasp_engaged))
-        self.eps_grasp_engaged[grasp_engaged] = 1
-        grasp_engaged = torch.logical_and(grasp_engaged, first_grasp_engaged)
         first_task_engaged = torch.logical_and(task_engaged, torch.logical_not(self.eps_task_engaged))
         self.eps_task_engaged[task_engaged] = 1
         task_engaged = torch.logical_and(task_engaged, first_task_engaged)
@@ -747,7 +740,6 @@ class FactoryEnvResidual(DirectRLEnv):
 
         rew_dict = {
             "action_delta": -action_delta,
-            # "grasp_engaged": grasp_engaged.float(),
             "grasp_success": grasp_successes.float(),
             "task_engaged": task_engaged.float(),
             "task_success": task_successes.float(),
