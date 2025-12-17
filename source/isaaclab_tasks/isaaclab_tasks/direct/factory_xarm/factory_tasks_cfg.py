@@ -112,7 +112,7 @@ class PegInsert(FactoryTask):
     fixed_asset_cfg = Hole8mm()
     held_asset_cfg = Peg8mm()
     asset_size = 8.0
-    duration_s = 10.0
+    duration_s = 20.0
 
     # Robot
     hand_init_pos: list = [0.0, 0.0, 0.047]  # Relative to fixed asset tip.

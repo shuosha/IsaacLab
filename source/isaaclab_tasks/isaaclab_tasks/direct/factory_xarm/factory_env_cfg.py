@@ -457,7 +457,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 class FactoryTaskPegInsertCfg(FactoryEnvCfg):
     task_name = "peg_insert"
     task = PegInsert()
-    episode_length_s = 10.0
+    episode_length_s = 20.0
 
 
 @configclass

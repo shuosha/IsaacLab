@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 from pathlib import Path
-import argparse, math, re, glob
-from typing import List, Optional, Tuple, Iterable
+import argparse, math, re, glob, json
+from typing import List, Optional, Tuple, Iterable, Dict
 
 import cv2
 import numpy as np
@@ -50,6 +50,24 @@ def _crop(img: np.ndarray, crop: Optional[Tuple[int, int, int, int]]) -> np.ndar
     y0, y1, x0, x1 = crop
     return img[y0:y1, x0:x1]
 
+def _load_meta_filter(meta_json: Optional[Path]) -> Optional[Dict[str, bool]]:
+    """
+    meta_json is expected to be a JSON dict like:
+      {"episode_0000": false, "episode_0001": true, ...}
+    Returns None if meta_json is None.
+    """
+    if meta_json is None:
+        return None
+    with open(meta_json, "r") as f:
+        meta = json.load(f)
+    if not isinstance(meta, dict):
+        raise ValueError("meta.json must be a JSON object (dict) mapping episode_* -> bool")
+    # be permissive: coerce truthy/falsey to bool if possible
+    out: Dict[str, bool] = {}
+    for k, v in meta.items():
+        out[str(k)] = bool(v)
+    return out
+
 # --------------------- 1) single videos (H.264) ---------------------
 
 def make_single_videos(root: Path, fps: int = 30, cam_idx: Optional[int] = None,
@@ -58,6 +76,11 @@ def make_single_videos(root: Path, fps: int = 30, cam_idx: Optional[int] = None,
     """
     Create H.264 per-episode videos:
       videos/eps_{04d}_cam_{idx}.mp4
+    
+    If meta.json exists in root, labels videos with success/failure:
+      videos/success_eps_{04d}_cam_{idx}.mp4 (episodes marked True)
+      videos/failure_eps_{04d}_cam_{idx}.mp4 (episodes marked False)
+    
     Skips files that already exist. Returns list of (cam_idx, video_path).
     """
     videos = _videos_dir(root)
@@ -66,6 +89,10 @@ def make_single_videos(root: Path, fps: int = 30, cam_idx: Optional[int] = None,
     if not episodes:
         print("[warn] no episode_* found")
         return outputs
+
+    # Check if meta.json exists in root
+    meta_json_path = root / "meta.json"
+    meta = _load_meta_filter(meta_json_path) if meta_json_path.exists() else None
 
     # discover all cameras (respect cam_idx filter)
     cam_set = set()
@@ -86,11 +113,22 @@ def make_single_videos(root: Path, fps: int = 30, cam_idx: Optional[int] = None,
 
         m = re.findall(r"\d+", ep.name)
         ep_num = int(m[0]) if m else 0
+        
+        # Determine success/failure label if meta exists
+        label = None
+        if meta is not None:
+            label = "success" if meta.get(ep.name, False) else "failure"
+        
         for c in cams:
             rgb_dir = ep / f"camera_{c}" / "rgb"
             if not rgb_dir.is_dir():
                 continue
-            out_mp4 = videos / f"eps_{ep_num:04d}_cam_{c}.mp4"
+            
+            # Build output filename with optional label
+            if label is None:
+                out_mp4 = videos / f"eps_{ep_num:04d}_cam_{c}.mp4"
+            else:
+                out_mp4 = videos / f"{label}_eps_{ep_num:04d}_cam_{c}.mp4"
             if out_mp4.exists():
                 outputs.append((c, out_mp4))
                 continue
@@ -127,7 +165,7 @@ def make_single_videos(root: Path, fps: int = 30, cam_idx: Optional[int] = None,
             ) as w:
                 for f in frames():       # f must be RGB (H,W,3) uint8
                     w.append_data(f)
-                    
+
             print(f"[ok] {out_mp4}")
             outputs.append((c, out_mp4))
     return outputs
@@ -144,6 +182,11 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
       - Grid (cols x rows)
       - Shorter episodes loop their last frame so all end together
       - Output: videos/collage_cam_{idx}.mp4
+
+    If meta.json exists in root, creates two collages per camera:
+      - success_collage_cam_{idx}.mp4 (episodes marked True)
+      - failure_collage_cam_{idx}.mp4 (episodes marked False)
+    Otherwise, creates a single collage_cam_{idx}.mp4 with all episodes.
     """
     videos = _videos_dir(root)
     episodes = _list_episodes(root)
@@ -151,28 +194,51 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
         print("[warn] no episode_* found")
         return
 
+    # Check if meta.json exists in root
+    meta_json_path = root / "meta.json"
+    meta = _load_meta_filter(meta_json_path) if meta_json_path.exists() else None
+    
+    # Determine if we need to create separate success/failure collages
+    if meta is not None:
+        success_episodes = [ep for ep in episodes if meta.get(ep.name, False)]
+        failure_episodes = [ep for ep in episodes if not meta.get(ep.name, False)]
+        episode_sets = [("success", success_episodes), ("failure", failure_episodes)]
+    else:
+        episode_sets = [(None, episodes)]
+
     cam_set = set()
-    for ep in episodes:
-        cam_set.update(_list_cameras(ep))
+    for ep_set_name, eps in episode_sets:
+        for ep in eps:
+            cam_set.update(_list_cameras(ep))
     cams = sorted(cam_set)
     if not cams:
         print("[warn] no cameras found for collage")
         return
 
-    for c in cams:
-        out_mp4 = videos / f"collage_cam_{c}.mp4"
-        if out_mp4.exists():
-            print(f"[skip] {out_mp4} (exists)")
+    for ep_set_name, episodes_subset in episode_sets:
+        if not episodes_subset:
+            if ep_set_name is not None:
+                print(f"[warn] no episodes for {ep_set_name}")
             continue
 
-        # episode -> jpgs (for this camera)
-        ep_jpgs: List[List[Path]] = []
-        for ep in episodes:
-            rgb_dir = ep / f"camera_{c}" / "rgb"
-            if rgb_dir.is_dir():
-                lst = _natsorted_jpgs(rgb_dir, pattern)
-                if lst:
-                    ep_jpgs.append(lst)
+        for c in cams:
+            if ep_set_name is None:
+                out_mp4 = videos / f"collage_cam_{c}.mp4"
+            else:
+                out_mp4 = videos / f"{ep_set_name}_collage_cam_{c}.mp4"
+            
+            if out_mp4.exists():
+                print(f"[skip] {out_mp4} (exists)")
+                continue
+
+            # episode -> jpgs (for this camera)
+            ep_jpgs: List[List[Path]] = []
+            for ep in episodes_subset:
+                rgb_dir = ep / f"camera_{c}" / "rgb"
+                if rgb_dir.is_dir():
+                    lst = _natsorted_jpgs(rgb_dir, pattern)
+                    if lst:
+                        ep_jpgs.append(lst)
         if not ep_jpgs:
             continue
 
@@ -272,12 +338,12 @@ def main():
     ap.add_argument("root", help="Path to root/ containing episode_XXXX/")
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--cam-idx", type=int, default=None, help="For singles: only this camera index")
-    ap.add_argument("--cols", type=int, default=5, help="Collage columns")
-    ap.add_argument("--scale", type=float, default=0.25, help="Collage downscale factor")
+    ap.add_argument("--cols", type=int, default=10, help="Collage columns")
+    ap.add_argument("--scale", type=float, default=0.1, help="Collage downscale factor")
     ap.add_argument("--collage", action="store_true", help="Only make collage videos")
     ap.add_argument("--single", action="store_true", help="Only make single videos")
     ap.add_argument("--eps_idx", type=int, default=None, help="(not used) For singles: only this episode index")
-    ap.add_argument("--crop", type=int, nargs=4, default=[150, -150, 250, -250], metavar=("Y0","Y1","X0","X1"),
+    ap.add_argument("--crop", type=int, nargs=4, default=[100, -150, 150, -150], metavar=("Y0","Y1","X0","X1"),
                 help="Optional crop: y0 y1 x0 x1 in pixel coords")
     args = ap.parse_args()
 

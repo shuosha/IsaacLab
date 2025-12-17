@@ -3,18 +3,20 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Script to play a checkpoint if an RL agent from RL-Games."""
+"""Script to visualize failure cases by running play.py and storing all images for one episode per environment."""
 
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import json
 import sys
 import cv2
+import os
 
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Play a checkpoint of an RL agent from RL-Games.")
+parser = argparse.ArgumentParser(description="Visualize failure cases by running an RL agent and storing images.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument(
@@ -38,11 +40,12 @@ parser.add_argument(
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--output_dir", type=str, default="logs/visualize_failure_cases", help="Output directory for images and meta.json")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
-args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
+args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video:
     args_cli.enable_cameras = True
 
@@ -57,10 +60,10 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import math
-import os
 import random
 import time
 import torch
+import numpy as np
 
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
@@ -88,7 +91,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
-    """Play with RL-Games agent."""
+    """Play with RL-Games agent and store images for one episode per environment."""
     # grab task name for checkpoint path
     task_name = args_cli.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
@@ -101,9 +104,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "training_data": False,     # yellow + purple
         "rewards": True,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
-        "failed_envs": False,      # red tint
+        "failed_envs": True,      # red tint
     }
     env_cfg.env_options.verbose = True
+    env_cfg.env_options.enable_cameras = True
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -195,6 +199,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
+    # Create output directory
+    output_path = os.path.abspath(args_cli.output_dir)
+    os.makedirs(output_path, exist_ok=True)
+    print(f"[INFO] Saving images to: {output_path}")
+
+    # Track episode completion per environment
+    num_envs = env.unwrapped.num_envs
+    episode_done = torch.zeros(num_envs, dtype=torch.bool, device=env.unwrapped.device)
+    timesteps = [0] * num_envs
+    # Track ep_succeeded flags for each episode (captured when episode completes)
+    ep_succeeded_dict = {}
+    
+    # Get camera attributes from environment
+    env_unwrapped = env.unwrapped
+
+    # Create directories for each environment episode
+    for env_id in range(num_envs):
+        episode_dir = os.path.join(output_path, f"episode_{env_id:04d}")
+        cam_dir = os.path.join(episode_dir, f"camera_0", "rgb")
+        os.makedirs(cam_dir, exist_ok=True)
+
     # reset environment
     obs = env.reset()
     if isinstance(obs, dict):
@@ -205,6 +230,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # initialize RNN states if used
     if agent.is_rnn:
         agent.init_rnn()
+    
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
@@ -220,22 +246,53 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # env stepping
             obs, _, dones, _ = env.step(actions)
 
-            # perform operations for terminated episodes
-            if len(dones) > 0:
-                # reset rnn state for terminated episodes
-                if agent.is_rnn and agent.states is not None:
-                    for s in agent.states:
-                        s[:, dones, :] = 0.0
-        if args_cli.video:
-            timestep += 1
-            # exit the play loop after recording one video
-            if timestep == args_cli.video_length:
+            img_tensor = env.unwrapped.front_rgb # (num_envs, H, W, C) tensor
+
+            # Store images for environments that haven't completed their episode
+            for env_id in range(num_envs):
+                if not episode_done[env_id]:
+                    # Save images for this environment (before checking done)
+                    episode_dir = os.path.join(output_path, f"episode_{env_id:04d}")
+                    cam_dir = os.path.join(episode_dir, f"camera_0", "rgb")
+                    img_path = os.path.join(cam_dir, f"{timesteps[env_id]:06d}.jpg")
+
+                    img = img_tensor[env_id].cpu().numpy()
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    cv2.imwrite(img_path, img_bgr)
+
+                    timesteps[env_id] += 1
+                    
+                    done = dones[env_id].item()
+                    
+                    # Mark episode as done if dones is True
+                    if done:
+                        # Capture ep_succeeded flag before environment resets
+                        ep_succeeded = bool(env_unwrapped.ep_succeeded[env_id].item())
+                        ep_succeeded_dict[f"episode_{env_id:04d}"] = ep_succeeded
+                        episode_done[env_id] = True
+                        print(f"[INFO] Episode {env_id} completed at timestep {timesteps[env_id]}, succeeded: {ep_succeeded_dict.get(f'episode_{env_id:04d}', False)}")
+
+                    else:
+                        ep_succeeded_dict[f"episode_{env_id:04d}"] = False
+                        
+            
+            # Check if all episodes are done
+            if torch.all(episode_done):
+                print("[INFO] All episodes completed.")
                 break
 
-        # time delay for real-time evaluation
-        sleep_time = dt - (time.time() - start_time)
-        if args_cli.real_time and sleep_time > 0:
-            time.sleep(sleep_time)
+    # Ensure all episodes are in the dict (in case some didn't complete)
+    for env_id in range(num_envs):
+        if f"episode_{env_id:04d}" not in ep_succeeded_dict:
+            print(f"[WARNING] Episode {env_id} did not complete. Setting ep_succeeded to False.")
+            ep_succeeded_dict[f"episode_{env_id:04d}"] = False
+    
+    # Save meta.json
+    meta_path = os.path.join(output_path, "meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(ep_succeeded_dict, f, indent=2)
+    print(f"[INFO] Saved metadata to: {meta_path}")
+    print(f"[INFO] Success rate: {sum(ep_succeeded_dict.values())}/{len(ep_succeeded_dict)}")
 
     # close the simulator
     env.close()
