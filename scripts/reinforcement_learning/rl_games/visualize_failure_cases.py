@@ -40,7 +40,7 @@ parser.add_argument(
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
-parser.add_argument("--output_dir", type=str, default="logs/visualize_failure_cases", help="Output directory for images and meta.json")
+parser.add_argument("--output_name", type=str, default="no_name", help="Name of the output directory to save images.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -200,7 +200,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dt = env.unwrapped.step_dt
 
     # Create output directory
-    output_path = os.path.abspath(args_cli.output_dir)
+    output_path = os.path.abspath(f"logs/visualize_failure_cases/{args_cli.output_name}")
     os.makedirs(output_path, exist_ok=True)
     print(f"[INFO] Saving images to: {output_path}")
 

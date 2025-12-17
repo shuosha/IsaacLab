@@ -505,6 +505,8 @@ class FactoryEnvResidual(DirectRLEnv):
         ctrl_target_gripper_dof_pos = torch.where(self.base_actions[:, 7:8] > 0.5, 1.0, 0.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
+        elif self.cfg_task.name == "nut_thread":
+            ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=0.75)
 
         self.env_actions = torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
 
@@ -552,8 +554,8 @@ class FactoryEnvResidual(DirectRLEnv):
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
-        dist_threshold = 0.15
-        terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold
+        dist_threshold = 0.2
+        terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold # to eliminate the case where held asset falls far away
         terminated |= self.ep_succeeded.bool()
 
         if self.cfg_task.name == "peg_insert":

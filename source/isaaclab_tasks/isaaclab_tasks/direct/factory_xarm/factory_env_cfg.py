@@ -471,4 +471,4 @@ class FactoryTaskGearMeshCfg(FactoryEnvCfg):
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
     task_name = "nut_thread"
     task = NutThread()
-    episode_length_s = 30.0
+    episode_length_s = 40.0
