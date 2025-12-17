@@ -8,6 +8,8 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
+from .factory_utils import resolve_hf_file
+
 ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
 
 @configclass
@@ -31,6 +33,8 @@ class HeldAssetCfg:
 
 @configclass
 class RobotCfg:
+    hf_repo: str = "shashuo0104/rrl"
+    robot_hf_file: str = "assets/robot/xarm7_gripper.usd"
     robot_usd: str = ""
     xarm_fingerpad_length: float = 0.04
     friction: float = 0.75
@@ -101,11 +105,9 @@ class Hole8mm(FixedAssetCfg):
 
 @configclass
 class PegInsert(FactoryTask):
-    initial_poses_path: str = "logs/data/teleop_peg_insert_9/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path: str = "logs/data/teleop_peg_insert_9/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
-
-    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/peg_insert/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    hf_repo = "shashuo0104/rrl"
+    initial_poses_hf_file: str = "teleop_data/peg_insert/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_hf_file: str = "teleop_data/peg_insert/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 1.57
     
     name = "peg_insert"
@@ -210,14 +212,9 @@ class MediumGear(HeldAssetCfg):
 
 @configclass
 class GearMesh(FactoryTask):
-    initial_poses_path: str = "logs/data/teleop_gear_mesh_9/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path: str = "logs/data/teleop_gear_mesh_9/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
-
-    initial_poses_path_v2: str = "logs/data/1117_teleop_gear_mesh_20/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v2: str = "logs/data/1117_teleop_gear_mesh_20/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
-
-    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/gear_mesh/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    hf_repo = "shashuo0104/rrl"
+    initial_poses_hf_file: str = "teleop_data/gear_mesh/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_hf_file: str = "teleop_data/gear_mesh/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
 
     close_gripper: float = 1.18
     name = "gear_mesh"
@@ -389,7 +386,9 @@ class BoltM16(FixedAssetCfg):
 
 @configclass
 class NutM32(HeldAssetCfg):
-    usd_path = "logs/assets/urdf/m36_nut/m36_nut_flat.usd"
+    hf_repo = "shashuo0104/rrl"
+    usd_hf_file = "assets/objects/m36_nut.usd"
+    usd_path = resolve_hf_file(hf_repo, usd_hf_file)
     diameter = 0.024
     height = 0.01
     mass = 0.03
@@ -398,7 +397,9 @@ class NutM32(HeldAssetCfg):
 
 @configclass
 class BoltM32(FixedAssetCfg):
-    usd_path = "logs/assets/urdf/m36_bolt/m36_bolt_flat.usd"
+    hf_repo = "shashuo0104/rrl"
+    usd_hf_file = "assets/objects/m36_bolt.usd"
+    usd_path = resolve_hf_file(hf_repo, usd_hf_file)
     diameter = 0.024
     height = 0.025
     base_height = 0.01
@@ -409,8 +410,9 @@ class BoltM32(FixedAssetCfg):
 class NutThread(FactoryTask):
     name = "nut_thread"
 
-    initial_poses_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_path_v3: str = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/data/nut_thread/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    hf_repo = "shashuo0104/rrl"
+    initial_poses_hf_file: str = "teleop_data/nut_thread/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_hf_file: str = "teleop_data/nut_thread/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 0.69
     
     fixed_asset_cfg = BoltM32()

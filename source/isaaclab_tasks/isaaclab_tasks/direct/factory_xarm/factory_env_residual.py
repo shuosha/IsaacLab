@@ -52,7 +52,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.vis_options = self.cfg.env_options.vis_options
 
         self.base_actions_agent = NearestNeighborBuffer(
-            self.cfg_task.action_data_path_v3, 
+            factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
             self.num_envs, 
             min_horizon=1, 
             max_horizon=45, 
@@ -69,7 +69,7 @@ class FactoryEnvResidual(DirectRLEnv):
         # self.cfg.episode_length_s = self.base_actions_agent.get_max_episode_length() * (self.cfg.sim.dt * self.cfg.decimation)
         # self.max_per_eps_length = self.base_actions_agent.get_max_per_episode_length() # (num_eps, )
 
-        self.initial_poses = torch.load(self.cfg_task.initial_poses_path_v3) # dict each of shape (tot_eps, dim) # type: ignore
+        self.initial_poses = torch.load(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.initial_poses_hf_file)) # dict each of shape (tot_eps, dim) # type: ignore
         self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
 
         # ctrl params
@@ -80,7 +80,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
 
         # abs ik for reset
-        urdf = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/assets/xarm7.urdf"
+        urdf = factory_utils.resolve_hf_file(self.cfg_task.hf_repo, "assets/robot/xarm7.urdf")
         chain = pk.build_chain_from_urdf(open(urdf, mode="rb").read())
         # chain.print_tree()
         self.serial_chain = pk.SerialChain(chain, "link7", "link_base")
@@ -970,7 +970,7 @@ class FactoryEnvResidual(DirectRLEnv):
                     pass
 
         if self.teleop_mode:
-            base_fingertip_pos = self.load_all_episode_act_pos(self.cfg_task.action_data_path_v3)
+            base_fingertip_pos = self.load_all_episode_act_pos(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file))
             base_fingertip_pos = base_fingertip_pos.reshape(-1, 3)
 
             from isaacsim.util.debug_draw import _debug_draw

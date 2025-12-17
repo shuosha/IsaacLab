@@ -21,6 +21,7 @@ from isaaclab.utils.math import quat_from_matrix
 from isaaclab.markers import VisualizationMarkersCfg
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
+from .factory_utils import resolve_hf_file
 
 OBS_DIM_CFG = {
     "fingertip_pos": 3,
@@ -55,11 +56,11 @@ STATE_DIM_CFG = {
     "base_actions": 8,
 }
 
-intr_path = "logs/data/calibration/251119_rrl_1cam/intrinsics.json"
+# TODO: move to hf
+intr_path = resolve_hf_file("shashuo0104/rrl", "cameras/intrinsics.json")
 with open(intr_path, "r") as f:
     intr = json.load(f)
-
-extr_path = "logs/data/calibration/251119_rrl_1cam/extrinsics.json"
+extr_path = resolve_hf_file("shashuo0104/rrl", "cameras/extrinsics.json")
 with open(extr_path, "r") as f:
     extr = json.load(f)
 
@@ -260,11 +261,10 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=False)
 
-    XARM_USD_PATH = "source/isaaclab_tasks/isaaclab_tasks/direct/factory_xarm/assets/xarm7_gripper.usd"
     robot: ArticulationCfg = ArticulationCfg(
         prim_path="/World/envs/env_.*/robot",
         spawn=sim_utils.UsdFileCfg(
-            usd_path=XARM_USD_PATH,
+            usd_path=resolve_hf_file(task.robot_cfg.hf_repo, task.robot_cfg.robot_hf_file),
             activate_contact_sensors=env_options.measure_force,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,

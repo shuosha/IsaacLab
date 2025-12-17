@@ -163,3 +163,14 @@ def x_axis_diff_ge_n_deg(q1: torch.Tensor,
     angle_deg = angle_rad * (180.0 / math.pi)
 
     return angle_deg >= n_deg
+
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+
+def resolve_hf_file(repo_id: str, filename: str, revision: str | None = None) -> str:
+    p = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        revision=revision,
+    )
+    return str(Path(p))
