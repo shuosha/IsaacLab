@@ -106,8 +106,8 @@ class Hole8mm(FixedAssetCfg):
 @configclass
 class PegInsert(FactoryTask):
     hf_repo = "shashuo0104/rrl"
-    initial_poses_hf_file: str = "teleop_data/peg_insert/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_hf_file: str = "teleop_data/peg_insert/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    initial_poses_hf_file: str = "train_data/peg_insert/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_hf_file: str = "train_data/peg_insert/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 1.57
     
     name = "peg_insert"
@@ -213,8 +213,8 @@ class MediumGear(HeldAssetCfg):
 @configclass
 class GearMesh(FactoryTask):
     hf_repo = "shashuo0104/rrl"
-    initial_poses_hf_file: str = "teleop_data/gear_mesh/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_hf_file: str = "teleop_data/gear_mesh/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    initial_poses_hf_file: str = "train_data/gear_mesh/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_hf_file: str = "train_data/gear_mesh/robot_trajectories.npz" # NOTE: get this from teleop
 
     close_gripper: float = 1.18
     name = "gear_mesh"
@@ -411,8 +411,8 @@ class NutThread(FactoryTask):
     name = "nut_thread"
 
     hf_repo = "shashuo0104/rrl"
-    initial_poses_hf_file: str = "teleop_data/nut_thread/initial_poses/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_hf_file: str = "teleop_data/nut_thread/robot_states/robot_trajectories.npz" # NOTE: get this from teleop
+    initial_poses_hf_file: str = "train_data/nut_thread/initial_poses.pt" # NOTE: get this from replay (also validate)
+    action_data_hf_file: str = "train_data/nut_thread/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 0.69
     
     fixed_asset_cfg = BoltM32()
