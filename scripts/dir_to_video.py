@@ -50,6 +50,19 @@ def _crop(img: np.ndarray, crop: Optional[Tuple[int, int, int, int]]) -> np.ndar
     y0, y1, x0, x1 = crop
     return img[y0:y1, x0:x1]
 
+def _make_even_hw(img: np.ndarray) -> np.ndarray:
+    """
+    libx264 + yuv420p requires even width/height.
+    Minimal-change fix: drop the last row/col if odd (no aspect distortion).
+    """
+    h, w = img.shape[:2]
+    if h % 2 == 1:
+        img = img[:-1, :, :]
+        h -= 1
+    if w % 2 == 1:
+        img = img[:, :-1, :]
+    return img
+    
 def _load_meta_filter(meta_json: Optional[Path]) -> Optional[Dict[str, bool]]:
     """
     meta_json is expected to be a JSON dict like:
@@ -140,19 +153,22 @@ def make_single_videos(root: Path, fps: int = 30, cam_idx: Optional[int] = None,
             first = cv2.imread(str(jpgs[0]))
             if first is None:
                 continue
-            H, W = first.shape[:2]
-            if first.shape[:2] != (H, W):
-                first = cv2.resize(first, (W, H), interpolation=cv2.INTER_AREA)
+
+            # Determine consistent per-frame size based on first frame after crop
             first = _crop(first, crop)
+            first = _make_even_hw(first)
+            H, W = first.shape[:2]
 
             def frames() -> Iterable[np.ndarray]:
                 for p in jpgs:
                     img = cv2.imread(str(p))
                     if img is None:
                         continue
+                    img = _crop(img, crop)
+                    img = _make_even_hw(img)
                     if img.shape[:2] != (H, W):
                         img = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
-                    img = _crop(img, crop)
+                        img = _make_even_hw(img)
                     yield _bgr_to_rgb(img)
 
             # H.264 + yuv420p for Windows/macOS preview compatibility
@@ -178,8 +194,9 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
     """
     For each camera index:
       - Gather episodes with camera_{idx}/rgb/*.jpg
-      - Downscale by 'scale'
-      - Grid (cols x rows)
+      - 1) Crop
+      - 2) Scale (NO resize-back to original proportions)
+      - 3) Collage grid (cols x rows)
       - Shorter episodes loop their last frame so all end together
       - Output: videos/collage_cam_{idx}.mp4
 
@@ -251,23 +268,15 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
             if f0_full is None:
                 continue
 
-            # original full-res size
-            H0, W0 = f0_full.shape[:2]
-
             # 1) crop
-            if crop is not None:
-                y0, y1, x0, x1 = crop
-                f0 = f0_full[y0:y1, x0:x1]
-            else:
-                f0 = f0_full
+            f0 = _crop(f0_full, crop)
 
-            # 2) resize back to original proportions (full size)
-            f0 = cv2.resize(f0, (W0, H0), interpolation=cv2.INTER_AREA)
-
-            # 3) final scale for collage
+            # 2) scale (do NOT resize back to original)
             if scale != 1.0:
-                f0 = cv2.resize(f0, (0, 0), fx=scale, fy=scale,
-                                interpolation=cv2.INTER_AREA)
+                f0 = cv2.resize(f0, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+            # enforce even dims for libx264/yuv420p
+            f0 = _make_even_hw(f0)
 
             first_frame = _bgr_to_rgb(f0)
             break
@@ -276,9 +285,15 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
             print(f"[skip] camera {c}: no readable frames")
             continue
 
-        H, W = first_frame.shape[:2]  # final collage cell size
+        H, W = first_frame.shape[:2]  # final collage cell size (cropped+scaled)
         rows = math.ceil(len(ep_jpgs) / cols)
         canvas_h, canvas_w = rows * H, cols * W
+
+        # Ensure canvas itself also satisfies even dims (it will if H,W even)
+        if canvas_h % 2 == 1:
+            canvas_h -= 1
+        if canvas_w % 2 == 1:
+            canvas_w -= 1
 
         lens = [len(lst) for lst in ep_jpgs]
         max_len = max(lens)
@@ -290,30 +305,31 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
                     r, col = divmod(k, cols)
                     y0, y1 = r * H, (r + 1) * H
                     x0, x1 = col * W, (col + 1) * W
-                    idx = min(t, n - 1)  # loop last frame once episode ends
+
+                    # If we trimmed canvas_h/canvas_w to even, last row/col may not fit fully
+                    if y1 > canvas_h or x1 > canvas_w:
+                        continue
+
+                    idx = min(t, n - 1)
                     p = ep_jpgs[k][idx]
                     img_full = cv2.imread(str(p))
                     if img_full is None:
                         continue
 
                     # 1) crop
-                    if crop is not None:
-                        y0c, y1c, x0c, x1c = crop
-                        img = img_full[y0c:y1c, x0c:x1c]
-                    else:
-                        img = img_full
+                    img = _crop(img_full, crop)
 
-                    # 2) resize back to original proportions (H0, W0)
-                    img = cv2.resize(img, (W0, H0), interpolation=cv2.INTER_AREA)
-
-                    # 3) final scale
+                    # 2) scale (no resize-back)
                     if scale != 1.0:
-                        img = cv2.resize(img, (0, 0), fx=scale, fy=scale,
-                                        interpolation=cv2.INTER_AREA)
+                        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
-                    # safety: should already match (H, W)
+                    # enforce even dims (libx264)
+                    img = _make_even_hw(img)
+
+                    # safety: match cell size
                     if img.shape[:2] != (H, W):
                         img = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
+                        img = _make_even_hw(img)
 
                     canvas[y0:y1, x0:x1] = _bgr_to_rgb(img)
                 yield canvas
@@ -338,17 +354,26 @@ def main():
     ap.add_argument("root", help="Path to root/ containing episode_XXXX/")
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--cam-idx", type=int, default=None, help="For singles: only this camera index")
-    ap.add_argument("--cols", type=int, default=10, help="Collage columns")
-    ap.add_argument("--scale", type=float, default=0.1, help="Collage downscale factor")
+    ap.add_argument("--cols", type=int, default=5, help="Collage columns")
+    ap.add_argument("--scale", type=float, default=1.0, help="Collage downscale factor")
     ap.add_argument("--collage", action="store_true", help="Only make collage videos")
     ap.add_argument("--single", action="store_true", help="Only make single videos")
     ap.add_argument("--eps_idx", type=int, default=None, help="(not used) For singles: only this episode index")
-    ap.add_argument("--crop", type=int, nargs=4, default=[100, -150, 150, -150], metavar=("Y0","Y1","X0","X1"),
-                help="Optional crop: y0 y1 x0 x1 in pixel coords")
+    ap.add_argument(
+        "--crop",
+        type=int,
+        nargs=4,
+        default=[120, -200, 300, -280],
+        metavar=("Y0", "Y1", "X0", "X1"),
+        help="Optional crop: y0 y1 x0 x1 in pixel coords",
+    )
     args = ap.parse_args()
 
     root = Path(args.root).expanduser().resolve()
-    assert (args.single or args.collage) and args.single != args.collage, "Please specify --single or --collage"
+
+    if not args.single and not args.collage:
+        args.single = True
+        args.collage = True
 
     crop = tuple(args.crop) if args.crop is not None else None
 

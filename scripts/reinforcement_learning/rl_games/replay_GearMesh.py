@@ -20,7 +20,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=20, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=10, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
@@ -167,13 +167,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
-    input_path = "logs/data/1119_teleop_peg_insert_20"
-    output_path = "logs/replay/1119_teleop_peg_insert_20"
+    input_path = "hf_git/test_data/gear_mesh"
+    output_path = os.path.join(input_path, "sim_replay")
+    os.makedirs(output_path, exist_ok=True)
 
     # load traj & object data
-    eps_idx = list(range(20))
-    assert env.unwrapped.num_envs == len(eps_idx), "Number of envs must match number of trajs to replay."
-    obj_states_path: str = f"{input_path}/obj_states/object_states.npz"
+    eps_idx = list(range(args_cli.num_envs))
+    obj_states_path: str = f"{input_path}/object_states.npz"
     obj_data = np.load(obj_states_path, allow_pickle=True)
 
     held2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
@@ -181,10 +181,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     fixed2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
     fixed2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
 
-    robot_states_path: str = f"{input_path}/robot_states/robot_trajectories.npz"
+    robot_states_path: str = f"{input_path}/robot_trajectories.npz"
     robot_data = np.load(robot_states_path, allow_pickle=True)
 
-    init_robot_qpos_path = f"{input_path}/robot_states/init_qpos_sim.npy"
+    init_robot_qpos_path = f"{input_path}/init_qpos_sim.npy"
     init_robot_qpos_data = np.load(init_robot_qpos_path, allow_pickle=True)
 
     max_ts = -1
@@ -203,13 +203,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     for i, ep in enumerate(eps_idx):
         eps_idx_key = f"episode_{eps_idx[i]:04d}"
         held2base_mat = torch.from_numpy(obj_data[f"{eps_idx_key}"][0]).to(env.device).reshape(4,4)
-        held2base_pos[i] = held2base_mat[:3, 3]
-        held2base_pos[i][2] = 0.0
+        held2base_pos[i] = held2base_mat[:3, 3] + torch.tensor([-0.02025, 0.0, 0.0]).to(env.device)
+        held2base_pos[i][2] = -0.0175
         held2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
         # NOTE: need formal sys id
-        # fixed2base_mat = torch.from_numpy(obj_data[f"episode_0000"][1]).to(env.device).reshape(4,4)
-        fixed2base_pos[i] = torch.tensor([0.37605, -0.07322, 0.0]).to(env.device)
-        # print("fixed2base_pos:", fixed2base_pos[i])
+        fixed2base_pos[i] = torch.tensor([0.360819, -0.104133, 0.0]).to(env.device)
         fixed2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
 
         # --- simple padding: repeat the last valid frame ---
@@ -249,8 +247,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # if save initial states
     if True:
-        init_states_output_path = f"{input_path}/initial_poses"
-        os.makedirs(init_states_output_path, exist_ok=True)
         init_poses = {
             "eef": real_init_eef,  # (num_eps, 7)
             "robot": real_init_qpos, # (num_eps, 7)
@@ -259,9 +255,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "fixed_pos": fixed2base_pos, # (num_eps, 3)
             "fixed_quat": fixed2base_quat, # (num_eps, 4)
         }
-        torch.save(init_poses, os.path.join(init_states_output_path, "initial_poses.pt"))
-        print(f"[INFO] Saved initial poses to: {os.path.join(init_states_output_path, 'initial_poses.pt')}")
-        exit()
+        torch.save(init_poses, os.path.join(input_path, "initial_poses.pt"))
+        print(f"[INFO] Saved initial poses to: {os.path.join(input_path, 'initial_poses.pt')}")
+        # simulation_app.close()
+        # exit()
 
     T = max_ts
     # reset environment

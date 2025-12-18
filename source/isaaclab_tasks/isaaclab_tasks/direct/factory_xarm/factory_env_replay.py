@@ -92,6 +92,12 @@ class FactoryEnvReplay(DirectRLEnv):
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
+        self.Kx = torch.tensor([200.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.Kr = torch.tensor([50.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.mx = torch.tensor([0.1], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.mr = torch.tensor([0.01], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
+
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -109,7 +115,7 @@ class FactoryEnvReplay(DirectRLEnv):
             self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg) # type: ignore
             self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg) # type: ignore
 
-        self.measure_force = self.cfg.env_options.measure_force
+        self.measure_force = True
         self.enable_cameras = True
 
         if self.measure_force:
@@ -139,14 +145,16 @@ class FactoryEnvReplay(DirectRLEnv):
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
         self.eef_pos = self._robot.data.body_pos_w[:, self.eef_body_idx] - self.scene.env_origins
+        self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.eef_body_idx]
         self.fingertip_midpoint_pos = torch_utils.tf_combine(
-            self._robot.data.body_quat_w[:, self.eef_body_idx],
+            self.fingertip_midpoint_quat,
             self.eef_pos,
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
             self.fingertip2eef_offset,
         )[1]
 
-        self.fingertip_midpoint_quat = self._robot.data.body_quat_w[:, self.eef_body_idx]
+        self.gripper = self._robot.data.joint_pos[:, self.gripper_dof_idx[0:1]]  # (num_envs, 1)
+
         self.fingertip_midpoint_linvel = self._robot.data.body_lin_vel_w[:, self.eef_body_idx] # NOTE: actually eef vels
         self.fingertip_midpoint_angvel = self._robot.data.body_ang_vel_w[:, self.eef_body_idx]
 
@@ -197,6 +205,7 @@ class FactoryEnvReplay(DirectRLEnv):
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
             "fingertip_quat": self.fingertip_midpoint_quat,
+            "gripper": self.gripper / 1.6,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "joint_pos": self.joint_pos[:, 0:7],
@@ -246,12 +255,12 @@ class FactoryEnvReplay(DirectRLEnv):
         # self.actions = self.ema_factor * action.clone().to(self.device) + (1 - self.ema_factor) * self.actions
         self.goal_fingertip_pos = action[:, 0:3]
         self.goal_fingertip_quat = action[:, 3:7]
-        self.goal_gripper_pos = action[:, -1:] * 1.6
+        self.goal_gripper_pos = torch.clamp(action[:, -1:], 0.0, 1.0) * 1.6
 
         if self.cfg_task.name == "gear_mesh":
-            self.goal_gripper_pos = torch.clamp(self.goal_gripper_pos, max=1.18)
-        elif self.cfg_task.name == "peg_insert":
-            self.goal_gripper_pos = torch.clamp(self.goal_gripper_pos, max=1.575)
+            self.goal_gripper_pos = torch.clamp(self.goal_gripper_pos, max=1.2)
+        elif self.cfg_task.name == "nut_thread":
+            self.goal_gripper_pos = torch.clamp(self.goal_gripper_pos, max=0.75)
 
     def _apply_action(self):
         """Apply actions for policy as delta targets from current position."""
@@ -321,6 +330,7 @@ class FactoryEnvReplay(DirectRLEnv):
             dt=self.physics_dt,
             F_ext=self.F_ext if self.measure_force else None,
             device=self.device,
+            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=1.0,
         )
 
         self._robot.set_joint_position_target(self.arm_joint_pose_target, joint_ids=self.arm_dof_idx)

@@ -100,11 +100,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.env_options.vis_options = {
-        "action_goals": True,      # red, blue, green triangle
+        "action_goals": False,      # red, blue, green triangle
         "training_data": False,     # yellow + purple
-        "rewards": True,           # pink circles/shapes
+        "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
-        "failed_envs": True,      # red tint
+        "failed_envs": False,      # red tint
     }
     env_cfg.env_options.verbose = True
     env_cfg.env_options.enable_cameras = True

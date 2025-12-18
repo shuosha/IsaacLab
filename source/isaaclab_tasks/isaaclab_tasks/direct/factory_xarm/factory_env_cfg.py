@@ -303,7 +303,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 "right_inner_knuckle_joint": 0.0,
                 "right_finger_joint": 0.0,
             },
-            pos=(0.0, 0.0, 0.0),
+            pos=(0.0, 0.0, 0.008),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         actuators={
@@ -317,7 +317,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             "xarm_hand": ImplicitActuatorCfg(
                 joint_names_expr=["gripper"], 
                 # effort_limit_sim=40.0,
-                # velocity_limit_sim=0.04,
+                # velocity_limit_sim=50.0,
                 stiffness=7500.0, # 5
                 damping=173.0, #0.0
             ),
