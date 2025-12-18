@@ -91,6 +91,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg_task.name == "nut_thread":
             self.prev_held_yaw = torch.zeros(self.num_envs, device=self.device)
             self.cumulative_rotation = torch.zeros(self.num_envs, device=self.device)  # cumulative yaw rotation in degrees
+            self.picked_up = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     def compute_ik_abs(
         self,
@@ -211,6 +212,9 @@ class FactoryEnvResidual(DirectRLEnv):
         self.actions = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
         self.env_actions = torch.zeros((self.num_envs, 8), device=self.device)
+
+        if self.cfg_task == "nut_thread":
+            self.picked_up = torch.where(self.held_pos[:, 2] > 0.03, torch.ones_like(self.picked_up), torch.zeros_like(self.picked_up)).bool()
 
     def _setup_scene(self):
         """Initialize simulation scene."""
@@ -562,6 +566,11 @@ class FactoryEnvResidual(DirectRLEnv):
             tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
             terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
 
+        elif self.cfg_task.name == "nut_thread":
+            on_ground = self.held_pos[:, 2] < 0.02
+            dropped = torch.logical_and(on_ground, self.picked_up)
+            terminated |= dropped
+
         done = torch.logical_or(time_out, terminated)
         s = self.ep_succeeded[done].float()  # shape [n_finished]
         n = s.numel()
@@ -790,7 +799,7 @@ class FactoryEnvResidual(DirectRLEnv):
                 print("Vis reward error: ", e)
                 pass
 
-            self.log("==============================")
+        self.log("==============================")
 
         return rew_buf
 
@@ -924,6 +933,7 @@ class FactoryEnvResidual(DirectRLEnv):
             held_yaw0 = (held_yaw0 + math.pi) % (2 * math.pi) - math.pi  # wrap to [-pi, pi]
             self.prev_held_yaw[env_ids] = held_yaw0
             self.cumulative_rotation[env_ids] = 0.0
+            self.picked_up[env_ids] = 0
 
         if self.vis_options["training_data"] == True:
             self.obs_traj = []
