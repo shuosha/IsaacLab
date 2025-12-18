@@ -478,8 +478,8 @@ class FactoryEnvResidual(DirectRLEnv):
 
         # Interpret actions as target rot (axis-angle) displacements
         rot_actions = self.actions[:, 3:6]
-        if self.cfg_task.unidirectional_rot:
-            rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
+        # if self.cfg_task.unidirectional_rot:
+        #     rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
         rot_actions = rot_actions * self.rot_threshold
 
         ctrl_target_fingertip_midpoint_pos = self.base_actions[:, 0:3] + pos_actions
