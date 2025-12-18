@@ -57,10 +57,10 @@ STATE_DIM_CFG = {
 }
 
 # TODO: move to hf
-intr_path = resolve_hf_file("shashuo0104/rrl", "cameras/intrinsics.json")
+intr_path = resolve_hf_file("shashuo0104/rrl_data", "cameras/intrinsics.json")
 with open(intr_path, "r") as f:
     intr = json.load(f)
-extr_path = resolve_hf_file("shashuo0104/rrl", "cameras/extrinsics.json")
+extr_path = resolve_hf_file("shashuo0104/rrl_data", "cameras/extrinsics.json")
 with open(extr_path, "r") as f:
     extr = json.load(f)
 

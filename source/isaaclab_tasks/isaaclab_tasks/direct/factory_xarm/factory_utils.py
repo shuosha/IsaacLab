@@ -167,7 +167,7 @@ def x_axis_diff_ge_n_deg(q1: torch.Tensor,
 from huggingface_hub import hf_hub_download
 from pathlib import Path
 
-def resolve_hf_file(repo_id: str, filename: str, repo_type = "datasets", revision: str | None = None) -> str:
+def resolve_hf_file(repo_id: str, filename: str, repo_type = "dataset", revision: str | None = None) -> str:
     p = hf_hub_download(
         repo_id=repo_id,
         filename=filename,
