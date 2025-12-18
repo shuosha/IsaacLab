@@ -33,7 +33,7 @@ class HeldAssetCfg:
 
 @configclass
 class RobotCfg:
-    hf_repo: str = "shashuo0104/rrl"
+    hf_repo = "shashuo0104/rrl_data"
     robot_hf_file: str = "assets/robot/xarm7_gripper.usd"
     robot_usd: str = ""
     xarm_fingerpad_length: float = 0.04
@@ -42,6 +42,7 @@ class RobotCfg:
 
 @configclass
 class FactoryTask:
+    hf_repo = "shashuo0104/rrl_data"
     robot_cfg: RobotCfg = RobotCfg()
     name: str = ""
     duration_s = 5.0
@@ -105,7 +106,6 @@ class Hole8mm(FixedAssetCfg):
 
 @configclass
 class PegInsert(FactoryTask):
-    hf_repo = "shashuo0104/rrl"
     initial_poses_hf_file: str = "train_data/peg_insert/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_hf_file: str = "train_data/peg_insert/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 1.57
@@ -212,7 +212,6 @@ class MediumGear(HeldAssetCfg):
 
 @configclass
 class GearMesh(FactoryTask):
-    hf_repo = "shashuo0104/rrl"
     initial_poses_hf_file: str = "train_data/gear_mesh/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_hf_file: str = "train_data/gear_mesh/robot_trajectories.npz" # NOTE: get this from teleop
 
@@ -386,7 +385,7 @@ class BoltM16(FixedAssetCfg):
 
 @configclass
 class NutM32(HeldAssetCfg):
-    hf_repo = "shashuo0104/rrl"
+    hf_repo = "shashuo0104/rrl_data"
     usd_hf_file = "assets/objects/m36_nut.usd"
     usd_path = resolve_hf_file(hf_repo, usd_hf_file)
     diameter = 0.024
@@ -397,7 +396,7 @@ class NutM32(HeldAssetCfg):
 
 @configclass
 class BoltM32(FixedAssetCfg):
-    hf_repo = "shashuo0104/rrl"
+    hf_repo = "shashuo0104/rrl_data"
     usd_hf_file = "assets/objects/m36_bolt.usd"
     usd_path = resolve_hf_file(hf_repo, usd_hf_file)
     diameter = 0.024
@@ -410,7 +409,6 @@ class BoltM32(FixedAssetCfg):
 class NutThread(FactoryTask):
     name = "nut_thread"
 
-    hf_repo = "shashuo0104/rrl"
     initial_poses_hf_file: str = "train_data/nut_thread/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_hf_file: str = "train_data/nut_thread/robot_trajectories.npz" # NOTE: get this from teleop
     close_gripper: float = 0.69
