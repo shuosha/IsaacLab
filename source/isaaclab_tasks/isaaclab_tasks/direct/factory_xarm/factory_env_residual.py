@@ -501,8 +501,7 @@ class FactoryEnvResidual(DirectRLEnv):
         )
 
         # gripper_action = self.actions[:, 6:7] #* self.gripper_threshold
-        # ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
-        ctrl_target_gripper_dof_pos = torch.where(self.base_actions[:, 7:8] > 0.5, 1.0, 0.0) * 1.6
+        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
