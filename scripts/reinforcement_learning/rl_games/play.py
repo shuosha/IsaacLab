@@ -98,7 +98,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.env_options.vis_options = {
         "action_goals": True,      # red, blue, green triangle
-        "training_data": False,     # yellow + purple
+        "training_data": True,     # yellow + purple
         "rewards": True,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint

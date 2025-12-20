@@ -292,7 +292,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, sim_fingertip_pos, sim_eef_quat, self.gripper) # (num_envs, residual_action_dim) at eef
         
         if self.vis_options["training_data"]:
-            self.obs_base, quat_base, _ = self.base_actions_agent.get_closest_obs(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper, verbose=False)
+            self.obs_base, quat_base, _ = self.base_actions_agent.get_closest_obs(self.episode_idx, sim_fingertip_pos, sim_eef_quat, self.gripper, verbose=False)
             self.obs_base[:, :2] += self.xy_translation_noise
 
         self.base_actions[:, :2] += self.xy_translation_noise
@@ -461,7 +461,7 @@ class FactoryEnvResidual(DirectRLEnv):
             self._compute_intermediate_values(dt=self.physics_dt)
 
         # Interpret actions as target pos displacements and set pos target
-        pos_actions = self.actions[:, 0:3] * self.pos_threshold #* torch.norm(self.fingertip_midpoint_pos - self.base_actions[:, 0:3], dim=1, keepdim=True)
+        pos_actions = self.actions[:, 0:3] * self.pos_threshold 
 
         # Interpret actions as target rot (axis-angle) displacements
         rot_actions = self.actions[:, 3:6]
@@ -491,8 +491,15 @@ class FactoryEnvResidual(DirectRLEnv):
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
 
+        ctrl_target_eef_pos = torch_utils.tf_combine(
+            ctrl_target_fingertip_midpoint_quat,
+            ctrl_target_fingertip_midpoint_pos,
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
+            -self.sim_fingertip2eef,
+        )[1]
+
         gripper_action = self.actions[:, 6:7]
-        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0)
+        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
@@ -501,14 +508,14 @@ class FactoryEnvResidual(DirectRLEnv):
         self.env_actions = torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
 
         self.generate_ctrl_signals(
-            ctrl_target_fingertip_midpoint_pos=ctrl_target_fingertip_midpoint_pos,
+            ctrl_target_eef_pos=ctrl_target_eef_pos,
             ctrl_target_fingertip_midpoint_quat=ctrl_target_fingertip_midpoint_quat,
             ctrl_target_gripper_dof_pos=ctrl_target_gripper_dof_pos,
         )
 
     def generate_ctrl_signals(
         self, 
-        ctrl_target_fingertip_midpoint_pos, 
+        ctrl_target_eef_pos, 
         ctrl_target_fingertip_midpoint_quat,
         ctrl_target_gripper_dof_pos, # (num_envs, 1)
         ):
@@ -518,7 +525,7 @@ class FactoryEnvResidual(DirectRLEnv):
             eef_pos=self.eef_pos,
             eef_quat=self.fingertip_midpoint_quat,
             jacobian=self.eef_jacobian,
-            ctrl_target_eef_pos=ctrl_target_fingertip_midpoint_pos,
+            ctrl_target_eef_pos=ctrl_target_eef_pos,
             ctrl_target_eef_quat=ctrl_target_fingertip_midpoint_quat,
             xdot_ref=self.eef_vel,
             dt=self.physics_dt,
@@ -926,46 +933,30 @@ class FactoryEnvResidual(DirectRLEnv):
             self.obs_traj = []
             self.act_traj = []
             for env_id in env_ids:
-                obs_pos, obs_quat, act_pos, act_quat = self.base_actions_agent.get_episode_traj(self.episode_idx[env_id].item())
-                obs_pos = torch_utils.tf_combine( # NOTE: real eef != sim eef
-                    obs_quat,
-                    obs_pos,
-                    torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(obs_quat.shape[0], 1),
-                    torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
-                )[1]
-                self.obs_traj.append(obs_pos)
+                obs_pos, obs_quat, act_pos, act_quat = self.base_actions_agent.get_episode_traj(self.episode_idx[env_id].item()) # (eps_len, 3)
+                obs_pos[:, :2] += self.xy_translation_noise[env_id] # broadcast
+                obs_pos += self.scene.env_origins[env_id]
+                act_pos[:, :2] += self.xy_translation_noise[env_id] 
+                act_pos += self.scene.env_origins[env_id]
+                
+                self.obs_traj.extend(obs_pos.cpu().numpy().tolist())
+                self.act_traj.extend(act_pos.cpu().numpy().tolist())
 
-                act_pos = torch_utils.tf_combine( # NOTE: real eef != sim eef
-                    act_quat,
-                    act_pos,
-                    torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(act_quat.shape[0], 1),
-                    torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(obs_quat.shape[0], 1),
-                )[1]
-                self.act_traj.append(act_pos)
+            yellow_color = [(1, 1, 0, 1)] * len(self.obs_traj)
+            purple_color = [(1, 0, 1, 1)] * len(self.act_traj)
 
-            for env_id in range(self.num_envs):
-                obs = self.obs_traj[env_id]
-                obs[:, :2] += self.xy_translation_noise[env_id]
-                act = self.act_traj[env_id]
-                act[:, :2] += self.xy_translation_noise[env_id]
-                obs_traj = (obs + self.scene.env_origins[env_id]).cpu().numpy().tolist()
-                yellow_color = [(1, 1, 0, 1)] * len(obs_traj)
+            try: 
+                if not hasattr(self, 'data_vis'):
+                    from isaacsim.util.debug_draw import _debug_draw
+                    self.data_vis = _debug_draw.acquire_debug_draw_interface()
+                self.data_vis.clear_points()
 
-                act_traj = (act + self.scene.env_origins[env_id]).cpu().numpy().tolist()
-                purple_color = [(1, 0, 1, 1)] * len(act_traj)
+                self.data_vis.draw_points(self.act_traj, purple_color, [5]*len(self.act_traj))
+                self.data_vis.draw_points(self.obs_traj, yellow_color, [5]*len(self.obs_traj))
 
-                try: 
-                    if not hasattr(self, 'data_vis'):
-                        from isaacsim.util.debug_draw import _debug_draw
-                        self.data_vis = _debug_draw.acquire_debug_draw_interface()
-                    self.data_vis.clear_points()
-
-                    self.data_vis.draw_points(act_traj, purple_color, [5]*len(act_traj))
-                    self.data_vis.draw_points(obs_traj, yellow_color, [5]*len(obs_traj))
-
-                except Exception as e:
-                    print("Visualize data error: ", e)
-                    pass
+            except Exception as e:
+                print("Visualize data error: ", e)
+                pass
 
         if self.teleop_mode:
             base_fingertip_pos = self.load_all_episode_act_pos(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file))
@@ -986,6 +977,7 @@ class FactoryEnvResidual(DirectRLEnv):
         Returns:
             list_of_trajs : list of (T, 3) tensors
         """
+        # TODO: deprecated
         flat = np.load(path, allow_pickle=True)
         flat = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in flat.items()}
 
