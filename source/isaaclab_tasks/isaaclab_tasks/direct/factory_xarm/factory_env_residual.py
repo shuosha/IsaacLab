@@ -498,7 +498,7 @@ class FactoryEnvResidual(DirectRLEnv):
             -self.sim_fingertip2eef,
         )[1]
 
-        gripper_action = self.actions[:, 6:7]
+        gripper_action = torch.abs(self.actions[:, 6:7])
         ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)

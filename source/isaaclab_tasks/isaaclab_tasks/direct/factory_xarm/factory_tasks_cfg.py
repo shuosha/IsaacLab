@@ -108,7 +108,7 @@ class Hole8mm(FixedAssetCfg):
 class PegInsert(FactoryTask):
     initial_poses_hf_file: str = "peginsert_train_data/data/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_hf_file: str = "peginsert_train_data/data/real_teleop_trajectories.npy" # NOTE: get this from teleop
-    close_gripper: float = 1.57
+    close_gripper: float = 0.93
     
     name = "peg_insert"
     fixed_asset_cfg = Hole8mm()
@@ -215,7 +215,7 @@ class GearMesh(FactoryTask):
     initial_poses_hf_file: str = "gearmesh_train_data/data/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_hf_file: str = "gearmesh_train_data/data/real_teleop_trajectories.npy" # NOTE: get this from teleop
 
-    close_gripper: float = 1.18
+    close_gripper: float = 0.69
     name = "gear_mesh"
     fixed_asset_cfg = GearBase()
     held_asset_cfg = MediumGear()
@@ -411,7 +411,7 @@ class NutThread(FactoryTask):
 
     initial_poses_hf_file: str = "nutthread_train_data/data/initial_poses.pt" # NOTE: get this from replay (also validate)
     action_data_hf_file: str = "nutthread_train_data/data/real_teleop_trajectories.npy" # NOTE: get this from teleop
-    close_gripper: float = 0.69
+    close_gripper: float = 0.39
     
     fixed_asset_cfg = BoltM32()
     held_asset_cfg = NutM32()
