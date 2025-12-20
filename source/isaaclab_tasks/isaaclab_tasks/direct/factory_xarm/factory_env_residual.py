@@ -645,7 +645,7 @@ class FactoryEnvResidual(DirectRLEnv):
             self.extras["success_times"] = success_times
 
         for rew_name, rew in rew_dict.items():
-            self.extras[f"logs_rew_{rew_name}"] = rew.mean()
+            self.extras[f"logs_rew_{rew_name}"] = rew.mean() * self.cfg.max_episode_length
 
     def _get_rewards(self):
         """Update rewards and compute success statistics."""
