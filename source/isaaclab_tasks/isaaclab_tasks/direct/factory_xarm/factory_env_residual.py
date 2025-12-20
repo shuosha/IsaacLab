@@ -173,8 +173,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height 
             self.held_center_pos_local[:, 2] -= self.cfg_task.robot_cfg.xarm_fingerpad_length / 3.0
 
-        # elif self.cfg_task.name == "nut_thread":
-        #     self.held_center_pos_local[:, 2] -= 0.015
+        elif self.cfg_task.name == "nut_thread":
+            self.held_center_pos_local[:, 2] += 0.01
 
         # Computer body indices.
         self.left_finger_body_idx = self._robot.body_names.index("left_finger") 
@@ -498,8 +498,8 @@ class FactoryEnvResidual(DirectRLEnv):
             -self.sim_fingertip2eef,
         )[1]
 
-        gripper_action = torch.abs(self.actions[:, 6:7])
-        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0) * 1.6
+        # gripper_action = torch.abs(self.actions[:, 6:7])
+        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
