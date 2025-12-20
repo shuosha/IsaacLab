@@ -35,6 +35,9 @@ parser.add_argument(
 )
 parser.add_argument("--output_dir", type=str, required=True)
 parser.add_argument("--num_episodes", type=int, required=True)
+# image saving control: default ON; provide --no_images to disable
+parser.add_argument("--no_images", dest="save_images", action="store_false", help="Disable saving images (only save states for successful episodes)")
+parser.set_defaults(save_images=True)
 
 # launch args
 AppLauncher.add_app_launcher_args(parser)
@@ -42,7 +45,7 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
 # Always enable cameras since you want images for debugging
-args_cli.enable_cameras = True
+args_cli.enable_cameras = not args_cli.headless
 
 # Clear sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -104,11 +107,12 @@ class DataCollector:
       - one line per played episode (success or fail)
     """
 
-    def __init__(self, output_dir: str, num_envs: int):
+    def __init__(self, output_dir: str, num_envs: int, save_images: bool = True):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.num_envs = num_envs
+        self.save_images = bool(save_images)
 
         self.played_root = self.output_dir / "episodes_played"
         self.collected_root = self.output_dir / "episodes_collected"
@@ -140,7 +144,8 @@ class DataCollector:
 
     def _ensure_played_dirs(self, played_id: int):
         ep_dir = self._played_episode_dir(played_id)
-        (ep_dir / "camera_0" / "rgb").mkdir(parents=True, exist_ok=True)
+        if self.save_images:
+            (ep_dir / "camera_0" / "rgb").mkdir(parents=True, exist_ok=True)
 
     def _start_new_played_episode(self, env_id: int):
         played_id = int(self.episodes_played)
@@ -157,7 +162,7 @@ class DataCollector:
         env_id: int,
         obs_vec: np.ndarray,
         action_vec: np.ndarray,
-        img_bgr: np.ndarray,
+        img_bgr: np.ndarray = None,
     ):
         """
         Save one timestep:
@@ -167,10 +172,11 @@ class DataCollector:
         played_id = int(self.curr_played_id[env_id])
         t = int(self.t_in_ep[env_id])
 
-        # --- Save image for debugging ---
+        # --- Save image for debugging (optional) ---
         # expected img_bgr: (H, W, 3) uint8
-        img_path = self._played_episode_dir(played_id) / "camera_0" / "rgb" / f"{t:06d}.jpg"
-        cv2.imwrite(img_path, img_bgr)
+        if self.save_images and img_bgr is not None:
+            img_path = self._played_episode_dir(played_id) / "camera_0" / "rgb" / f"{t:06d}.jpg"
+            cv2.imwrite(str(img_path), img_bgr)
 
         # --- Buffer state/action (RAM only) ---
         obs_np = np.asarray(obs_vec).reshape(-1)
@@ -244,7 +250,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "failed_envs": False,      # red tint
     }
     env_cfg.env_options.verbose = False
-    env_cfg.env_options.enable_cameras = True
+    env_cfg.env_options.enable_cameras = args_cli.enable_cameras
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -353,13 +359,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
 
             # Pull tensors from unwrapped env
-            img_tensor = env_unwrapped.front_rgb          # (N, H, W, 3) uint8
+            if args_cli.enable_cameras:
+                img_tensor = env_unwrapped.front_rgb          # (N, H, W, 3) uint8
             env_actions_tensor = env_unwrapped.env_actions  # (N, A)
             success_tensor = env_unwrapped.ep_succeeded    # (N,) bool/0-1
 
             obs_np_all = obs[:, :-14].detach().cpu().numpy() # exclude base action and prev residual action
             act_np_all = env_actions_tensor.detach().cpu().numpy()
-            img_np_all = img_tensor.detach().cpu().numpy()
+            if args_cli.enable_cameras:
+                img_np_all = img_tensor.detach().cpu().numpy()
             dones_np = dones.detach().cpu().numpy()
             succ_np = success_tensor.detach().cpu().numpy()
 
@@ -370,8 +378,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 obs_np = obs_np_all[env_id].reshape(-1)
                 act_np = act_np_all[env_id].reshape(-1)
 
-                img = img_np_all[env_id]
-                img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                if args_cli.enable_cameras:
+                    img = img_np_all[env_id]
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                else:
+                    img_bgr = None
 
                 collector.save_step(env_id, obs_np, act_np, img_bgr)
 

@@ -12,6 +12,7 @@ from .factory_env_replay import FactoryEnvReplay
 from .factory_env_residual_no_base import FactoryEnvResidualNoBase
 from .factory_env_residual import FactoryEnvResidual
 from .factory_env_residual_teleop import FactoryEnvResidualTeleop
+from .factory_env_dexgen import FactoryEnvDexGen
 from .factory_env_cfg import FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg, FactoryTaskPegInsertCfg
 
 ##
@@ -122,6 +123,36 @@ gym.register(
 gym.register(
     id="Isaac-Factory-Xarm-PegInsert-Teleop",
     entry_point="isaaclab_tasks.direct.factory_xarm:FactoryEnvResidualTeleop",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FactoryTaskPegInsertCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Factory-Xarm-NutThread-DexGen",
+    entry_point="isaaclab_tasks.direct.factory_xarm:FactoryEnvDexGen",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FactoryTaskNutThreadCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Factory-Xarm-GearMesh-DexGen",
+    entry_point="isaaclab_tasks.direct.factory_xarm:FactoryEnvDexGen",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FactoryTaskGearMeshCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Factory-Xarm-PegInsert-DexGen",
+    entry_point="isaaclab_tasks.direct.factory_xarm:FactoryEnvDexGen",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": FactoryTaskPegInsertCfg,
