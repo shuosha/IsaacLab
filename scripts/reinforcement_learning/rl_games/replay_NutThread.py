@@ -20,7 +20,6 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=10, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
@@ -110,8 +109,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     task_name = args_cli.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
 
+    # find num_envs based on real teleop data
+    input_path = "rrl_data/nutthread_train_data"
+    output_path = os.path.join(input_path, "sim_replay")
+    os.makedirs(output_path, exist_ok=True)
+
+    robot_states_path: str = f"{input_path}/data/real_teleop_trajectories.npy"
+    robot_data = np.load(robot_states_path, allow_pickle=True).item()
+
+    # load traj & object data
+    num_envs = len(robot_data)
+    eps_idx = list(range(num_envs))
+
     # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.scene.num_envs = num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
     # randomly sample a seed if seed = -1
@@ -167,63 +178,55 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
-    input_path = "hf_git/train_data/nut_thread"
-    output_path = os.path.join(input_path, "sim_replay")
-    os.makedirs(output_path, exist_ok=True)
-
-    # load traj & object data
-    eps_idx = list(range(args_cli.num_envs))
-    obj_states_path: str = f"{input_path}/object_states.npz"
-    obj_data = np.load(obj_states_path, allow_pickle=True)
+    obj_states_path: str = f"{input_path}/data/object_states.npy"
+    obj_data = np.load(obj_states_path, allow_pickle=True).item()
 
     held2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
     held2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
     fixed2base_pos = torch.zeros((len(eps_idx), 3)).to(env.device)
     fixed2base_quat = torch.zeros((len(eps_idx), 4)).to(env.device)
 
-    robot_states_path: str = f"{input_path}/robot_trajectories.npz"
-    robot_data = np.load(robot_states_path, allow_pickle=True)
-
-    init_robot_qpos_path = f"{input_path}/init_qpos_sim.npy"
+    init_robot_qpos_path = f"{input_path}/data/init_qpos_sim.npy"
     init_robot_qpos_data = np.load(init_robot_qpos_path, allow_pickle=True)
 
     max_ts = -1
     for i, ep in enumerate(eps_idx):
         eps_idx_key = f"episode_{eps_idx[i]:04d}"
-        max_ts = max(max_ts, robot_data[f"{eps_idx_key}/obs.eef_pos"].shape[0])
+        max_ts = max(max_ts, robot_data[f"{eps_idx_key}"]["obs.eef_pos"].shape[0])
 
     # --- padding bookkeeping ---
     # valid_mask: (max_ts, num_envs) bool tensor, True for valid timesteps, False for padded timesteps
     valid_mask = torch.zeros((max_ts, len(eps_idx)), dtype=torch.bool).to(env.device)
 
-    real_eef_pos_targets = torch.zeros((max_ts, len(eps_idx), 3)).to(env.device)
+    real_fingertip_pos_targets = torch.zeros((max_ts, len(eps_idx), 3)).to(env.device)
     real_quat_targets = torch.zeros((max_ts, len(eps_idx), 4)).to(env.device)
     real_gripper_targets = torch.zeros((max_ts, len(eps_idx), 1)).to(env.device)
 
     for i, ep in enumerate(eps_idx):
         eps_idx_key = f"episode_{eps_idx[i]:04d}"
         held2base_mat = torch.from_numpy(obj_data[f"{eps_idx_key}"][0]).to(env.device).reshape(4,4)
-        fixed2base_mat = torch.from_numpy(obj_data[f"{eps_idx_key}"][1]).to(env.device).reshape(4,4)
-
         held2base_pos[i] = held2base_mat[:3, 3]
-        held2base_pos[i, 2] = 0.015
-        held2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)#torch_utils.rot_matrices_to_quats(held2base_mat[:3, :3])
+        held2base_pos[i][2] = -0.008
+        held2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
         # NOTE: need formal sys id
+        fixed2base_mat = torch.from_numpy(obj_data[f"{eps_idx_key}"][1]).to(env.device).reshape(4,4)
         fixed2base_pos[i] = fixed2base_mat[:3, 3]
-        fixed2base_pos[i, 2] = 0.035
-        fixed2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)#torch_utils.rot_matrices_to_quats(fixed2base_mat[:3, :3])
+        fixed2base_pos[i][2] -= 0.008
+        
+        # print("fixed2base_pos:", fixed2base_pos[i])
+        fixed2base_quat[i] = torch.tensor([1.0, 0.0, 0.0, 0.0]).to(env.device)
 
         # --- simple padding: repeat the last valid frame ---
-        pos_np   = robot_data[f"{eps_idx_key}/action.eef_pos"]
-        quat_np  = robot_data[f"{eps_idx_key}/action.eef_quat"]
-        grip_np  = robot_data[f"{eps_idx_key}/action.gripper"]
+        pos_np   = robot_data[f"{eps_idx_key}"]["action.fingertip_pos"]
+        quat_np  = robot_data[f"{eps_idx_key}"]["action.eef_quat"]
+        grip_np  = robot_data[f"{eps_idx_key}"]["action.gripper"]
         L = pos_np.shape[0]
 
         pos_t  = torch.from_numpy(pos_np).to(env.device)
         quat_t = torch.from_numpy(quat_np).to(env.device)
         grip_t = torch.from_numpy(grip_np).to(env.device)
 
-        real_eef_pos_targets[:L, i] = pos_t
+        real_fingertip_pos_targets[:L, i] = pos_t
         real_quat_targets[:L, i] = quat_t
         real_gripper_targets[:L, i] = grip_t
 
@@ -233,7 +236,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             last_pos = pos_t[-1].expand(max_ts - L, -1)
             last_quat = quat_t[-1].expand(max_ts - L, -1)
             last_grip = grip_t[-1].expand(max_ts - L, -1)
-            real_eef_pos_targets[L:, i] = last_pos
+            real_fingertip_pos_targets[L:, i] = last_pos
             real_quat_targets[L:, i] = last_quat
             real_gripper_targets[L:, i] = last_grip
         else:
@@ -241,25 +244,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # import pdb; pdb.set_trace()
 
-    real_init_qpos = torch.from_numpy(init_robot_qpos_data).to(env.device)
-    real_init_eef = torch.cat([
-        real_eef_pos_targets[0,:,:],
+    sim_init_qpos = torch.from_numpy(init_robot_qpos_data).to(env.device)
+    real_init_fingertip = torch.cat([
+        real_fingertip_pos_targets[0,:,:],
         real_quat_targets[0,:,:]
     ], dim=-1)
-    # print("real init qpos:", real_init_qpos.shape, real_init_qpos)
+    # print("real init qpos:", sim_init_qpos.shape, sim_init_qpos)
 
     # if save initial states
     if True:
         init_poses = {
-            "eef": real_init_eef,  # (num_eps, 7)
-            "robot": real_init_qpos, # (num_eps, 7)
+            "real_fingertip_pos": real_init_fingertip,  # (num_eps, 3)
+            "sim_init_qpos": sim_init_qpos, # (num_eps, 7)
             "held_pos": held2base_pos, # (num_eps, 3)
             "held_quat": held2base_quat, # (num_eps, 4)
             "fixed_pos": fixed2base_pos, # (num_eps, 3)
             "fixed_quat": fixed2base_quat, # (num_eps, 4)
         }
-        torch.save(init_poses, os.path.join(input_path, "initial_poses.pt"))
-        print(f"[INFO] Saved initial poses to: {os.path.join(input_path, 'initial_poses.pt')}")
+        torch.save(init_poses, os.path.join(input_path, "data", "initial_poses.pt"))
+        print(f"[INFO] Saved initial poses to: {os.path.join(input_path, 'data', 'initial_poses.pt')}")
         # simulation_app.close()
         # exit()
 
@@ -268,7 +271,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obs = env.reset()
 
     # set to initial pose
-    env.unwrapped._set_replay_default_pose(real_init_qpos, env_ids=torch.arange(len(eps_idx), device=env.device))
+    env.unwrapped._set_replay_default_pose(sim_init_qpos, env_ids=torch.arange(len(eps_idx), device=env.device))
     env.unwrapped._set_assets_state(
         held_pos=held2base_pos, 
         held_quat=held2base_quat, 
@@ -278,21 +281,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     )
     obs = env.unwrapped._get_observations()
     obs = obs["policy"]
+    actions = obs[:, :8].clone()
 
-    obs_eef_pos = []
-    obs_eef_quat = []
-    obs_gripper = []
+    N = len(eps_idx)
 
-    act_eef_pos = []
-    act_eef_quat = []
-    act_gripper = []
+    obs_fingertip_pos  = [[] for _ in range(N)]
+    obs_eef_quat = [[] for _ in range(N)]
+    obs_gripper  = [[] for _ in range(N)]
 
-    debug_dir = f"{output_path}/debug"
-    os.makedirs(debug_dir, exist_ok=True)
+    act_fingertip_pos  = [[] for _ in range(N)]
+    act_eef_quat = [[] for _ in range(N)]
+    act_gripper  = [[] for _ in range(N)]
+
     for i in range(len(eps_idx)):
         out_path = f"{output_path}/episode_{eps_idx[i]:04d}"
         os.makedirs(out_path, exist_ok=True)
-        cam_path = os.path.join(out_path, "camera_1", "rgb")
+        cam_path = os.path.join(out_path, "camera_0", "rgb")
         os.makedirs(cam_path, exist_ok=True)
 
     timestep = 0
@@ -304,37 +308,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            eef_real_pos = real_eef_pos_targets[timestep]
-            eef_quat = real_quat_targets[timestep]
-            gripper_pos = real_gripper_targets[timestep]
-            eef_sim_pos = torch_utils.tf_combine(
-                eef_quat,
-                eef_real_pos,
-                torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(len(eps_idx),1),
-                torch.tensor([[0.0, 0.0, 0.23]], device=env.device).repeat(len(eps_idx),1)
-            )[1]
-            actions = torch.cat([eef_sim_pos, eef_quat, gripper_pos], dim=-1)
+            obs, _, dones, _ = env.step(actions)
+            obs = obs["obs"]
 
-            obs_eef = torch_utils.tf_combine(
-                obs[:,3:7],
-                obs[:,:3],
-                torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(len(eps_idx),1),
-                torch.tensor([[0.0, 0.0, -0.23]], device=env.device).repeat(len(eps_idx),1)
-            )[1]
-
-            obs_eef_pos.append(obs_eef.cpu().numpy())
-            obs_eef_quat.append(obs[:,3:7].cpu().numpy())
-
-            act_eef_pos.append(eef_real_pos.cpu().numpy())
-            act_eef_quat.append(eef_quat.cpu().numpy())
+            real_fingertip_pos = real_fingertip_pos_targets[timestep]
+            real_eef_quat = real_quat_targets[timestep]
+            real_gripper_pos = real_gripper_targets[timestep]
+            actions = torch.cat([real_fingertip_pos, real_eef_quat, real_gripper_pos], dim=-1)
 
             for i in range(len(eps_idx)):
                 if not valid_mask[timestep, i]:
                     continue  # skip padded timesteps
-                cam_path = f"{output_path}/episode_{i:04d}/camera_1/rgb"
+                cam_path = f"{output_path}/episode_{eps_idx[i]:04d}/camera_0/rgb"
                 img = env.unwrapped.front_rgb[i].cpu().numpy()
                 img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(os.path.join(cam_path, f"{timestep:06d}.jpg"), img_bgr)
+                ok = cv2.imwrite(os.path.join(cam_path, f"{timestep:06d}.jpg"), img_bgr)
+                if not ok:
+                    print(f"[ERROR] imwrite failed: ep={eps_idx[i]} t={timestep} path={cam_path}")
+
+                obs_fingertip_pos[i].append(obs[i, :3].cpu().numpy())
+                obs_eef_quat[i].append(obs[i, 3:7].cpu().numpy())
+                obs_gripper[i].append(obs[i, 7:8].cpu().numpy())
+
+                act_fingertip_pos[i].append(real_fingertip_pos[i].cpu().numpy())
+                act_eef_quat[i].append(real_eef_quat[i].cpu().numpy())
+                act_gripper[i].append(real_gripper_pos[i].cpu().numpy())
 
             if len(eps_idx) == 1:
                 print("------------ Step Info (single env) -----------")
@@ -351,8 +349,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 print("---------------------------------")
 
             # env stepping
-            obs, _, dones, _ = env.step(actions)
-            obs = obs["obs"]
             timestep += 1
 
             if timestep >= T:
@@ -371,21 +367,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # close the simulator
     env.close()
 
-    arr_obs_pos  = np.array(obs_eef_pos)        # (T, N, 3)
-    arr_obs_quat = np.array(obs_eef_quat)       # (T, N, 4)
-    arr_act_pos  = np.array(act_eef_pos)        # (T, N, 3)
-    arr_act_quat = np.array(act_eef_quat)       # (T, N, 4)
-
     out_data = {}
     for i, ep in enumerate(eps_idx):
         k = f"episode_{ep:04d}"
-        out_data[f"{k}/obs.eef_pos"]    = arr_obs_pos[:,  i, :]
-        out_data[f"{k}/obs.eef_quat"]   = arr_obs_quat[:, i, :]
-        out_data[f"{k}/action.eef_pos"] = arr_act_pos[:,  i, :]
-        out_data[f"{k}/action.eef_quat"]= arr_act_quat[:, i, :]
+        out_data[k] = {
+            "obs.fingertip_pos":     np.stack(obs_fingertip_pos[i], axis=0),      # (Li, 3)
+            "obs.eef_quat":    np.stack(obs_eef_quat[i], axis=0),     # (Li, 4)
+            "obs.gripper":     np.stack(obs_gripper[i], axis=0),      # (Li, 1)
+            "action.fingertip_pos":  np.stack(act_fingertip_pos[i], axis=0),      # (Li, 3)
+            "action.eef_quat": np.stack(act_eef_quat[i], axis=0),     # (Li, 4)
+            "action.gripper":  np.stack(act_gripper[i], axis=0),      # (Li, 1)
+        }
 
-    np.savez_compressed(os.path.join(debug_dir, "robot_trajectories.npz"), **out_data)
-    print(f"[INFO] Saved simulated trajectories to: {os.path.join(debug_dir,'robot_trajectories.npz')}")
+    np.save(os.path.join(input_path, "data", "sim_replay_trajectories.npy"), out_data)
+    print(f"[INFO] Saved simulated trajectories to: {os.path.join(input_path, 'data', 'sim_replay_trajectories.npy')}")
 
 
 if __name__ == "__main__":

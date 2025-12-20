@@ -92,8 +92,8 @@ class FactoryEnvReplay(DirectRLEnv):
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
-        self.Kx = torch.tensor([200.0], device=self.device).repeat(self.num_envs) # (num_envs, )
-        self.Kr = torch.tensor([50.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.Kx = torch.tensor([150.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.Kr = torch.tensor([100.0], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mx = torch.tensor([0.1], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mr = torch.tensor([0.01], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
@@ -105,7 +105,7 @@ class FactoryEnvReplay(DirectRLEnv):
         # spawn a usd file of a table into the scene
         cfg = sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd")
         cfg.func(
-            "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
+            "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, -0.006), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
 
         self._robot = Articulation(self.cfg.robot)
@@ -115,7 +115,7 @@ class FactoryEnvReplay(DirectRLEnv):
             self._small_gear_asset = Articulation(self.cfg_task.small_gear_cfg) # type: ignore
             self._large_gear_asset = Articulation(self.cfg_task.large_gear_cfg) # type: ignore
 
-        self.measure_force = True
+        self.measure_force = self.cfg.env_options.measure_force
         self.enable_cameras = True
 
         if self.measure_force:
@@ -142,6 +142,8 @@ class FactoryEnvReplay(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
+        self.blue_sphere_marker = VisualizationMarkers(self.cfg.blue_sphere_cfg)
+
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
         self.eef_pos = self._robot.data.body_pos_w[:, self.eef_body_idx] - self.scene.env_origins
@@ -153,7 +155,16 @@ class FactoryEnvReplay(DirectRLEnv):
             self.fingertip2eef_offset,
         )[1]
 
-        self.gripper = self._robot.data.joint_pos[:, self.gripper_dof_idx[0:1]]  # (num_envs, 1)
+        # self.blue_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
+
+        self.gripper = self._robot.data.joint_pos[:, self.gripper_dof_idx[0:1]] / 1.6 # (num_envs, 1)
+
+        if self.cfg_task.name == "gear_mesh":
+            self.gripper = torch.clamp(self.gripper, 0.0, 0.695)
+        elif self.cfg_task.name == "peg_insert":
+            self.gripper = torch.clamp(self.gripper, 0.0, 0.94)
+        elif self.cfg_task.name == "nut_thread":
+            self.gripper = torch.clamp(self.gripper, 0.0, 0.40)
 
         self.fingertip_midpoint_linvel = self._robot.data.body_lin_vel_w[:, self.eef_body_idx] # NOTE: actually eef vels
         self.fingertip_midpoint_angvel = self._robot.data.body_ang_vel_w[:, self.eef_body_idx]
@@ -205,7 +216,7 @@ class FactoryEnvReplay(DirectRLEnv):
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
             "fingertip_quat": self.fingertip_midpoint_quat,
-            "gripper": self.gripper / 1.6,
+            "gripper": self.gripper,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "joint_pos": self.joint_pos[:, 0:7],
@@ -262,6 +273,13 @@ class FactoryEnvReplay(DirectRLEnv):
         elif self.cfg_task.name == "nut_thread":
             self.goal_gripper_pos = torch.clamp(self.goal_gripper_pos, max=0.75)
 
+        self.goal_eef_pos = torch_utils.tf_combine(
+            self.goal_fingertip_quat,
+            self.goal_fingertip_pos,
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
+            -self.fingertip2eef_offset,
+        )[1]
+
     def _apply_action(self):
         """Apply actions for policy as delta targets from current position."""
         # Note: We use finite-differenced velocities for control and observations.
@@ -308,7 +326,7 @@ class FactoryEnvReplay(DirectRLEnv):
         # )
 
         self.generate_ctrl_signals(
-            ctrl_target_fingertip_midpoint_pos=self.goal_fingertip_pos,
+            ctrl_target_fingertip_midpoint_pos=self.goal_eef_pos,
             ctrl_target_fingertip_midpoint_quat=self.goal_fingertip_quat,
             ctrl_target_gripper_dof_pos=self.goal_gripper_pos,
         )
@@ -321,16 +339,16 @@ class FactoryEnvReplay(DirectRLEnv):
         ):
         self.arm_joint_pose_target, self.joint_vel_target, x_acc, _, self.eef_vel = factory_control.compute_dof_state_admittance(
             dof_pos=self.joint_pos,
-            eef_pos=self.fingertip_midpoint_pos,
+            eef_pos=self.eef_pos,
             eef_quat=self.fingertip_midpoint_quat,
-            jacobian=self.fingertip_midpoint_jacobian,
+            jacobian=self.eef_jacobian,
             ctrl_target_eef_pos=ctrl_target_fingertip_midpoint_pos,
             ctrl_target_eef_quat=ctrl_target_fingertip_midpoint_quat,
             xdot_ref=self.eef_vel,
             dt=self.physics_dt,
             F_ext=self.F_ext if self.measure_force else None,
             device=self.device,
-            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=1.0,
+            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=1.25,
         )
 
         self._robot.set_joint_position_target(self.arm_joint_pose_target, joint_ids=self.arm_dof_idx)
