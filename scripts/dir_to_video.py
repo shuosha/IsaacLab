@@ -232,6 +232,7 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
         print("[warn] no cameras found for collage")
         return
 
+    ep_jpgs = []  # type: ignore
     for ep_set_name, episodes_subset in episode_sets:
         if not episodes_subset:
             if ep_set_name is not None:
@@ -244,9 +245,9 @@ def make_collage_videos(root: Path, fps: int = 30, cols: int = 7,
             else:
                 out_mp4 = videos / f"{ep_set_name}_collage_cam_{c}.mp4"
             
-            if out_mp4.exists():
-                print(f"[skip] {out_mp4} (exists)")
-                continue
+            # if out_mp4.exists():
+            #     print(f"[skip] {out_mp4} (exists)")
+            #     continue
 
             # episode -> jpgs (for this camera)
             ep_jpgs: List[List[Path]] = []
@@ -363,7 +364,7 @@ def main():
         "--crop",
         type=int,
         nargs=4,
-        default=[120, -200, 300, -280],
+        default=[100, -180, 220, -300],
         metavar=("Y0", "Y1", "X0", "X1"),
         help="Optional crop: y0 y1 x0 x1 in pixel coords",
     )

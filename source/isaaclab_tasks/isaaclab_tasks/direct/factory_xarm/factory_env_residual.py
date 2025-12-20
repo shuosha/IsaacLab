@@ -55,7 +55,7 @@ class FactoryEnvResidual(DirectRLEnv):
             factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
             self.num_envs, 
             min_horizon=1, 
-            max_horizon=45, 
+            max_horizon=15, 
             device=self.device, 
             pad=True # type: ignore
         )
@@ -73,8 +73,8 @@ class FactoryEnvResidual(DirectRLEnv):
         self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
 
         # ctrl params
-        self.Kx = torch.tensor([200.0], device=self.device).repeat(self.num_envs) # (num_envs, )
-        self.Kr = torch.tensor([50.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.Kx = torch.tensor([150.0], device=self.device).repeat(self.num_envs) # (num_envs, )
+        self.Kr = torch.tensor([100.0], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mx = torch.tensor([0.1], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mr = torch.tensor([0.01], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.lam = torch.tensor([1e-2], device=self.device).repeat(self.num_envs) # (num_envs, )
@@ -167,10 +167,10 @@ class FactoryEnvResidual(DirectRLEnv):
         self.held_center_pos_local = torch.zeros((self.num_envs, 3), device=self.device) # center2held transform
         if self.cfg_task.name == "gear_mesh":
             self.held_center_pos_local[:, 0] += self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0]
-            self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.3
+            self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.3 + 0.01
 
         elif self.cfg_task.name == "peg_insert":
-            self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height
+            self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height 
             self.held_center_pos_local[:, 2] -= self.cfg_task.robot_cfg.xarm_fingerpad_length / 3.0
 
         # elif self.cfg_task.name == "nut_thread":
@@ -223,7 +223,7 @@ class FactoryEnvResidual(DirectRLEnv):
         # spawn a usd file of a table into the scene
         cfg = sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd")
         cfg.func(
-            "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, 0.0), orientation=(0.70711, 0.0, 0.0, 0.70711)
+            "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, -0.006), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
 
         self._robot = Articulation(self.cfg.robot)
@@ -266,7 +266,6 @@ class FactoryEnvResidual(DirectRLEnv):
         cfg.prim_path = "/Visuals/held_asset_marker"
         self.held_asset_marker = VisualizationMarkers(cfg)
 
-
         self.red_sphere_marker = VisualizationMarkers(self.cfg.red_sphere_cfg)
         self.blue_sphere_marker = VisualizationMarkers(self.cfg.blue_sphere_cfg)
         self.green_sphere_marker = VisualizationMarkers(self.cfg.green_sphere_cfg)
@@ -278,16 +277,11 @@ class FactoryEnvResidual(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
     def _compute_base_actions(self):
-        real_eef_pos = torch_utils.tf_combine( # NOTE: real eef != sim eef
-            self.fingertip_midpoint_quat,
-            self.fingertip_midpoint_pos,
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
-            -self.real_fingertip2eef,
-        )[1]
-        real_eef_pos[:, :2] -= self.xy_translation_noise
-        real_eef_quat = self.fingertip_midpoint_quat.clone()
-        real_eef_quat = torch_utils.quat_mul(
-            real_eef_quat,
+        sim_fingertip_pos = self.fingertip_midpoint_pos.clone()
+        sim_fingertip_pos[:, :2] -= self.xy_translation_noise
+        sim_eef_quat = self.fingertip_midpoint_quat.clone()
+        sim_eef_quat = torch_utils.quat_mul(
+            sim_eef_quat,
             torch_utils.quat_from_euler_xyz(
                 roll=torch.zeros((self.num_envs,), device=self.device),
                 pitch=torch.zeros((self.num_envs,), device=self.device),
@@ -295,24 +289,11 @@ class FactoryEnvResidual(DirectRLEnv):
             ),
         )
 
-        self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, real_eef_pos, real_eef_quat, self.gripper / 1.6) # (num_envs, residual_action_dim) at eef
+        self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, sim_fingertip_pos, sim_eef_quat, self.gripper) # (num_envs, residual_action_dim) at eef
         
         if self.vis_options["training_data"]:
-            self.obs_base, quat_base, _ = self.base_actions_agent.get_closest_obs(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper / 1.6, verbose=False)
-            self.obs_base = torch_utils.tf_combine( # NOTE: real eef != sim eef
-                quat_base,
-                self.obs_base,
-                torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
-                self.real_fingertip2eef,
-            )[1]
+            self.obs_base, quat_base, _ = self.base_actions_agent.get_closest_obs(self.episode_idx, real_eef_pos, self.fingertip_midpoint_quat, self.gripper, verbose=False)
             self.obs_base[:, :2] += self.xy_translation_noise
-
-        self.base_actions[:, 0:3] = torch_utils.tf_combine(
-            self.base_actions[:, 3:7],
-            self.base_actions[:, 0:3],
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
-            self.real_fingertip2eef,
-        )[1]
 
         self.base_actions[:, :2] += self.xy_translation_noise
         self.base_actions[:, 3:7] = torch_utils.quat_mul(
@@ -349,7 +330,13 @@ class FactoryEnvResidual(DirectRLEnv):
             self.sim_fingertip2eef,
         )[1]
 
-        self.gripper = self._robot.data.joint_pos[:, self.gripper_dof_idx[0:1]]  # (num_envs, 1)
+        self.gripper = self._robot.data.joint_pos[:, self.gripper_dof_idx[0:1]] / 1.6 # (num_envs, 1)
+        if self.cfg_task.name == "gear_mesh":
+            self.gripper = torch.clamp(self.gripper, 0.0, 0.695)
+        elif self.cfg_task.name == "peg_insert":
+            self.gripper = torch.clamp(self.gripper, 0.0, 0.94)
+        elif self.cfg_task.name == "nut_thread":
+            self.gripper = torch.clamp(self.gripper, 0.0, 0.40)
 
         self.fingertip_midpoint_linvel = self._robot.data.body_lin_vel_w[:, self.eef_body_idx] # NOTE: actually eef vels
         self.fingertip_midpoint_angvel = self._robot.data.body_ang_vel_w[:, self.eef_body_idx]
@@ -406,7 +393,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
             "fingertip_pos_rel_held": self.fingertip_midpoint_pos - noisy_held_pos,
             "fingertip_quat": self.fingertip_midpoint_quat,
-            "gripper": self.gripper / 1.6,
+            "gripper": self.gripper,
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
@@ -418,7 +405,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
             "fingertip_pos_rel_held": self.fingertip_midpoint_pos - self.held_pos_obs_frame,
             "fingertip_quat": self.fingertip_midpoint_quat,
-            "gripper": self.gripper / 1.6,
+            "gripper": self.gripper,
             "ee_linvel": self.fingertip_midpoint_linvel,
             "ee_angvel": self.fingertip_midpoint_angvel,
             "joint_pos": self.joint_pos[:, 0:7],
@@ -504,8 +491,8 @@ class FactoryEnvResidual(DirectRLEnv):
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
 
-        # gripper_action = self.actions[:, 6:7] #* self.gripper_threshold
-        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
+        gripper_action = self.actions[:, 6:7]
+        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + gripper_action, 0.0, 1.0)
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
@@ -528,16 +515,16 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.arm_joint_pose_target, self.joint_vel_target, x_acc, _, self.eef_vel = factory_control.compute_dof_state_admittance(
             dof_pos=self.joint_pos,
-            eef_pos=self.fingertip_midpoint_pos,
+            eef_pos=self.eef_pos,
             eef_quat=self.fingertip_midpoint_quat,
-            jacobian=self.fingertip_midpoint_jacobian,
+            jacobian=self.eef_jacobian,
             ctrl_target_eef_pos=ctrl_target_fingertip_midpoint_pos,
             ctrl_target_eef_quat=ctrl_target_fingertip_midpoint_quat,
             xdot_ref=self.eef_vel,
             dt=self.physics_dt,
             F_ext=self.F_ext if self.measure_force else None, # NOTE: external wrench at eef frame
             device=self.device,
-            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=1.0,
+            Kx=self.Kx, Kr=self.Kr, mx=self.mx, mr=self.mr, Dx=None, Dr=None, lam=self.lam, rot_scale=1.25,
         )
 
         self._robot.set_joint_position_target(self.arm_joint_pose_target, joint_ids=self.arm_dof_idx)
@@ -872,14 +859,14 @@ class FactoryEnvResidual(DirectRLEnv):
         )
         
         # reset robot
-        init_qpos = self.initial_poses["robot"][env_ids, self.episode_idx[env_ids]]
-        init_eef = self.initial_poses["eef"][env_ids, self.episode_idx[env_ids]] # (num_resets, 7)
-        sim_eef = init_eef.clone() # (num_resets, 7)
+        init_qpos = self.initial_poses["sim_init_qpos"][env_ids, self.episode_idx[env_ids]]
+        init_fingertip = self.initial_poses["real_fingertip_pos"][env_ids, self.episode_idx[env_ids]] # (num_resets, 7)
+        sim_eef = init_fingertip.clone() # (num_resets, 7)
         sim_eef[:, 0:3] = torch_utils.tf_combine(
             sim_eef[:, 3:7],
             sim_eef[:, 0:3],
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(len(env_ids), 1),
-            self.real_fingertip2eef[env_ids] - self.sim_fingertip2eef[env_ids],
+            -self.sim_fingertip2eef[env_ids],
         )[1]
         sim_eef[:, :2] += translation_noise
         sim_eef[:, 3:7] = torch_utils.quat_mul(

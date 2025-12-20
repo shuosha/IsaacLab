@@ -86,6 +86,7 @@ front2base = np.array(extr["cam2base"]["front2base"]).reshape(4, 4)
 R_front2base = front2base[:3, :3]
 q_front2base = quat_from_matrix(torch.from_numpy(R_front2base)).tolist() # wxyz
 t_front2base = front2base[:3, 3].tolist()
+t_front2base[1] += 0.0055
 
 @configclass
 class ObsRandCfg:
@@ -98,7 +99,7 @@ class BaseActionRandCfg:
 
 @configclass
 class EnvOptionsCfg:
-    measure_force = True
+    measure_force = False
     enable_cameras = False
     
     verbose = False
@@ -128,11 +129,10 @@ class CtrlCfg:
     res_gripper_action_threshold = [0.1]
 
     Kx_dmr_range = [100, 300]
-    Kr_dmr_range = [20, 50]
-    mx_dmr_range = [0.2, 0.05]
-    mr_dmr_range = [0.02, 0.005]
-    lam_dmr_range = [1e-3, 1e-2]
-
+    Kr_dmr_range = [50, 125]
+    mx_dmr_range = [0.1, 0.2]
+    mr_dmr_range = [0.01, 0.02]
+    lam_dmr_range = [5e-3, 2e-2]
 
     reset_joints = [0.035, -0.323, 0.0, 0.523, 0.0, 1.31, 0.0]
     reset_task_prop_gains = [300, 300, 300, 20, 20, 20]
@@ -157,7 +157,7 @@ class CtrlCfg:
 class FactoryEnvCfg(DirectRLEnvCfg):
     decimation = 8
     action_space = 6 # TODO: 7 for residual
-    residual_action_space = 6
+    residual_action_space = 7
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
@@ -176,7 +176,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     ]
 
     # for replay
-    obs_order_no_task: list = ["fingertip_pos", "fingertip_quat"]
+    obs_order_no_task: list = ["fingertip_pos", "fingertip_quat", "gripper"]
 
     # for residual policies
     residual_obs_order: list = [
@@ -303,7 +303,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
                 "right_inner_knuckle_joint": 0.0,
                 "right_finger_joint": 0.0,
             },
-            pos=(0.0, 0.0, 0.008),
+            pos=(0.0, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         actuators={
@@ -324,7 +324,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
     
-    sim_fingertip2eef = [0.0, 0.0, 0.17]
+    sim_fingertip2eef = [0.0, 0.0, 0.16]
     real_fingertip2eef = [0.0, 0.0, 0.23]
 
     eef_contact_sensor_cfg = ContactSensorCfg(

@@ -15,4 +15,5 @@ python scripts/reinforcement_learning/rl_games/collect_imitation_data.py \
     --task Isaac-Factory-Xarm-${task}-Residual \
     --num_envs "${num_envs}" \
     --checkpoint "${ckpt_path}/nn/FactoryXarm.pth" \
-    --output_dir "${output_dir}" --num_episodes "${num_eps}"
+    --output_dir "${output_dir}" --num_episodes "${num_eps}" \
+    --no_images --headless

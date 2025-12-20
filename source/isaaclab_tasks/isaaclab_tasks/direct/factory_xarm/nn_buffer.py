@@ -27,13 +27,17 @@ class NearestNeighborBuffer:
         self._min_horizon = int(min_horizon)
         self._max_horizon = int(max_horizon)
 
-        flat = np.load(path, allow_pickle=True)
-        flat = {k: torch.as_tensor(v, dtype=torch.float32, device=self._device)
-                for k, v in flat.items()}
+        data = np.load(path, allow_pickle=True).item()
+        eps = sorted(data.keys())
 
-        eps = sorted({k.split("/", 1)[0] for k in flat})
-        data = {e: {s.split("/", 1)[1]: flat[s] for s in flat if s.startswith(e)}
-                for e in eps}
+        # convert to torch
+        data = {
+            ep: {
+                k: torch.as_tensor(v, dtype=torch.float32, device=self._device)
+                for k, v in ep_dict.items()
+            }
+            for ep, ep_dict in data.items()
+        }
 
         lengths = torch.tensor([len(data[e]["obs.gripper"]) for e in eps],
                                device=self._device)
@@ -49,10 +53,10 @@ class NearestNeighborBuffer:
                 out[i, :len(x)] = x
             return out
 
-        self._obs_pos  = pad_last("obs.eef_pos", 3)
+        self._obs_pos  = pad_last("obs.fingertip_pos", 3)
         self._obs_quat = pad_last("obs.eef_quat", 4)
         self._obs_grip = pad_last("obs.gripper", 1)
-        self._act_pos  = pad_last("action.eef_pos", 3)
+        self._act_pos  = pad_last("action.fingertip_pos", 3)
         self._act_quat = pad_last("action.eef_quat", 4)
         self._act_grip = pad_last("action.gripper", 1)
         self._mask     = (torch.arange(T, device=self._device)
