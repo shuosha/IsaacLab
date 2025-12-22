@@ -327,10 +327,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
             # Store images for environments that haven't completed their episode
             for env_id in range(num_envs):
-                # Check done status FIRST
+                # Check done status FIRST; only handle completion once per episode
                 done = dones[env_id].item()
                 
-                if done:
+                if (not episode_done[env_id]) and done:
                     # Capture ep_succeeded flag before marking as done
                     ep_succeeded = bool(env_unwrapped.ep_succeeded[env_id].item())
                     ep_succeeded_dict[f"episode_{env_id:04d}"] = ep_succeeded
