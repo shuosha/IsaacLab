@@ -82,11 +82,11 @@ FRONT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
 FRONT_PINHOLE_CFG.horizontal_aperture_offset = -0.04
 
 front2base = np.array(extr["cam2base"]["front2base"]).reshape(4, 4)
+front2base[1, 3] += 0.0055  # adjust for sim vs real diff
 
 R_front2base = front2base[:3, :3]
 q_front2base = quat_from_matrix(torch.from_numpy(R_front2base)).tolist() # wxyz
 t_front2base = front2base[:3, 3].tolist()
-t_front2base[1] += 0.0055
 
 @configclass
 class ObsRandCfg:
@@ -110,6 +110,7 @@ class EnvOptionsCfg:
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red wireframes
+        "eval_mode": False,
     }
     teleop_mode = False
 
@@ -235,6 +236,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     ctrl: CtrlCfg = CtrlCfg()
     base_rand: BaseActionRandCfg = BaseActionRandCfg()
     env_options: EnvOptionsCfg = EnvOptionsCfg()
+    intr = FRONT_INTR
+    extr = front2base.tolist()
 
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(

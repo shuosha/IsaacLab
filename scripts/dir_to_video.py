@@ -364,7 +364,7 @@ def main():
         "--crop",
         type=int,
         nargs=4,
-        default=[100, -180, 220, -300],
+        default=[120, -200, 300, -280],
         metavar=("Y0", "Y1", "X0", "X1"),
         help="Optional crop: y0 y1 x0 x1 in pixel coords",
     )

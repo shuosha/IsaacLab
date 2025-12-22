@@ -87,6 +87,70 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # PLACEHOLDER: Extension template (do not remove this comment)
+def draw_trail(img, points, color="red", radius=3):
+    """
+    img: (H,W,3) BGR uint8 image
+    points: iterable of 5 (u,v) points (float or int)
+    color: "red" or "purple"
+    """
+
+    if color == "red":
+        # BGR gradient: yellow -> orange -> red
+        palette = [
+            np.array([0, 255, 255], dtype=np.uint8),   # yellow
+            np.array([0, 200, 255], dtype=np.uint8),   # yellow-orange
+            np.array([0, 140, 255], dtype=np.uint8),   # orange
+            np.array([0, 80, 220],  dtype=np.uint8),   # orange-red
+            np.array([0, 0, 200],   dtype=np.uint8),   # red
+        ]
+
+    elif color == "purple":
+        # BGR gradient: light ocean blue -> blue -> purple
+        palette = [
+            np.array([255, 220, 160], dtype=np.uint8), # light ocean blue
+            np.array([255, 170, 120], dtype=np.uint8), # cyan-blue
+            np.array([200, 100, 80],  dtype=np.uint8), # blue
+            np.array([160, 60, 120],  dtype=np.uint8), # blue-purple
+            np.array([120, 0, 160],   dtype=np.uint8), # purple
+        ]
+
+    else:
+        raise ValueError("color must be 'red' or 'purple'")
+
+    for (u, v), col in zip(points, palette):
+        if u < 0 or v < 0:
+            continue
+        cv2.circle(img, (int(u), int(v)), radius, col.tolist(), thickness=-1)
+
+    return img
+
+def project_points(points_cam, K):
+    """
+    points_cam: (N,3) array of 3D points in camera frame
+    K: (3,3) camera intrinsics matrix
+
+    returns:
+        points_img: (N,2) pixel coordinates
+    """
+    X = points_cam[:, 0]
+    Y = points_cam[:, 1]
+    Z = points_cam[:, 2]
+
+    # avoid divide-by-zero
+    Z = np.clip(Z, 1e-6, None)
+
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+
+    u = fx * X / Z + cx
+    v = fy * Y / Z + cy
+
+    return np.stack([u, v], axis=1)
+
+def transform_points(T, p):  # T: (4,4), p: (N,3)
+    p_h = np.concatenate([p, np.ones((p.shape[0], 1))], axis=1)  # (N,4)
+    out = (T @ p_h.T).T                                          # (N,4)
+    return out[:, :3]
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -105,9 +169,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
+        "eval_mode": True,        
     }
-    env_cfg.env_options.verbose = True
+    env_cfg.env_options.verbose = False
     env_cfg.env_options.enable_cameras = True
+
+    intr_mat = env_cfg.intr
+    intr_mat = np.array(intr_mat).reshape(3, 3)
+
+    extr_mat = env_cfg.extr
+    extr_mat = np.array(extr_mat).reshape(4, 4)
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -245,11 +316,44 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
             obs, _, dones, _ = env.step(actions)
-
             img_tensor = env.unwrapped.front_rgb # (num_envs, H, W, C) tensor
+
+            base_last5 = env_unwrapped.base_last5.get_points().cpu().numpy().reshape(5 * env_unwrapped.num_envs, 3)
+            base_last5 = transform_points(np.linalg.inv(extr_mat), base_last5)
+            base_last5_2d = project_points(base_last5, intr_mat).reshape(5, env_unwrapped.num_envs, 2)
+            residual_last5 = env_unwrapped.residual_last5.get_points().cpu().numpy().reshape(5 * env_unwrapped.num_envs, 3)
+            residual_last5 = transform_points(np.linalg.inv(extr_mat), residual_last5)
+            residual_last5_2d = project_points(residual_last5, intr_mat).reshape(5, env_unwrapped.num_envs, 2)
 
             # Store images for environments that haven't completed their episode
             for env_id in range(num_envs):
+                # Check done status FIRST
+                done = dones[env_id].item()
+                
+                if done:
+                    # Capture ep_succeeded flag before marking as done
+                    ep_succeeded = bool(env_unwrapped.ep_succeeded[env_id].item())
+                    ep_succeeded_dict[f"episode_{env_id:04d}"] = ep_succeeded
+                    episode_done[env_id] = True
+                    
+                    # Apply success/failure filter to the last saved image
+                    if timesteps[env_id] > 0:
+                        last_img_path = os.path.join(output_path, f"episode_{env_id:04d}", 
+                                                     f"camera_0", "rgb", f"{timesteps[env_id]-1:06d}.jpg")
+                        if os.path.exists(last_img_path):
+                            last_img = cv2.imread(last_img_path)
+                            if last_img is not None:
+                                # Create color overlay (light green for success, light red for failure)
+                                overlay = last_img.copy()
+                                color = (100, 255, 100) if ep_succeeded else (100, 100, 255)  # BGR format
+                                overlay[:] = color
+                                # Blend: 85% original, 15% color filter
+                                filtered = cv2.addWeighted(last_img, 0.85, overlay, 0.15, 0)
+                                cv2.imwrite(last_img_path, filtered)
+                    
+                    print(f"[INFO] Episode {env_id} completed at timestep {timesteps[env_id]}, succeeded: {ep_succeeded}")
+                    continue  # Skip saving this frame (it's the reset frame)
+
                 if not episode_done[env_id]:
                     # Save images for this environment (before checking done)
                     episode_dir = os.path.join(output_path, f"episode_{env_id:04d}")
@@ -258,24 +362,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
                     img = img_tensor[env_id].cpu().numpy()
                     img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                    cv2.imwrite(img_path, img_bgr)
+                    img_labeled = draw_trail(img_bgr, base_last5_2d[:, env_id], color="purple", radius=3)
+                    img_labeled = draw_trail(img_labeled, residual_last5_2d[:, env_id], color="red", radius=3)
+                    
+                    cv2.imwrite(img_path, img_labeled)
 
                     timesteps[env_id] += 1
-                    
-                    done = dones[env_id].item()
-                    
-                    # Mark episode as done if dones is True
-                    if done:
-                        # Capture ep_succeeded flag before environment resets
-                        ep_succeeded = bool(env_unwrapped.ep_succeeded[env_id].item())
-                        ep_succeeded_dict[f"episode_{env_id:04d}"] = ep_succeeded
-                        episode_done[env_id] = True
-                        print(f"[INFO] Episode {env_id} completed at timestep {timesteps[env_id]}, succeeded: {ep_succeeded_dict.get(f'episode_{env_id:04d}', False)}")
-
-                    else:
-                        ep_succeeded_dict[f"episode_{env_id:04d}"] = False
                         
-            
             # Check if all episodes are done
             if torch.all(episode_done):
                 print("[INFO] All episodes completed.")

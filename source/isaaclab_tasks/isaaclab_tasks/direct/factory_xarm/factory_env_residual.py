@@ -23,6 +23,7 @@ from . import factory_control, factory_utils
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
 from .nn_buffer import NearestNeighborBuffer
+from .ring_buffer import LastKPoints
 import pytorch_kinematics as pk
 
 class FactoryEnvResidual(DirectRLEnv):
@@ -51,17 +52,30 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.vis_options = self.cfg.env_options.vis_options
 
-        self.base_actions_agent = NearestNeighborBuffer(
-            factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
-            self.num_envs, 
-            min_horizon=1, 
-            max_horizon=15, 
-            device=self.device, 
-            pad=True # type: ignore
-        )
+        if self.vis_options["eval_mode"]:
+            self.base_actions_agent = NearestNeighborBuffer(
+                factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
+                self.num_envs, 
+                min_horizon=1, 
+                max_horizon=15, 
+                device=self.device, 
+                pad=True # type: ignore
+            )
+        else:
+            self.base_actions_agent = NearestNeighborBuffer(
+                factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
+                self.num_envs, 
+                min_horizon=1, 
+                max_horizon=15, 
+                device=self.device, 
+                pad=True # type: ignore
+            )
         self.base_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
         self.total_episodes: int = self.base_actions_agent.get_total_episodes() 
+        if self.vis_options["eval_mode"]:
+            # assert self.num_envs == self.total_episodes, "num_envs must equal total_episodes in eval_mode"
+            self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
         self.episode_idx = torch.randint(0, self.total_episodes, (self.num_envs,), device=self.device)
         # self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
 
@@ -92,6 +106,9 @@ class FactoryEnvResidual(DirectRLEnv):
             self.prev_held_yaw = torch.zeros(self.num_envs, device=self.device)
             self.cumulative_rotation = torch.zeros(self.num_envs, device=self.device)  # cumulative yaw rotation in degrees
             self.picked_up = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        self.base_last5 = LastKPoints(self.num_envs, K=5, device=self.device)
+        self.residual_last5 = LastKPoints(self.num_envs, K=5, device=self.device)
 
     def compute_ik_abs(
         self,
@@ -212,6 +229,9 @@ class FactoryEnvResidual(DirectRLEnv):
         self.actions = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
         self.prev_actions = torch.zeros_like(self.actions)
         self.env_actions = torch.zeros((self.num_envs, 8), device=self.device)
+
+        # Track continuous grasp from start of closing to fully closed
+        self.grasp_active = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
 
         if self.cfg_task == "nut_thread":
             self.picked_up = torch.where(self.held_pos[:, 2] > 0.03, torch.ones_like(self.picked_up), torch.zeros_like(self.picked_up)).bool()
@@ -444,6 +464,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.eps_grasp_succeeded[env_ids] = 0
         self.eps_task_engaged[env_ids] = 0
         self.eps_task_succeeded[env_ids] = 0
+        self.grasp_active[env_ids] = 0
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
@@ -585,6 +606,9 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.extras["rolling_avg_succ_rate"] = float(self.rolling_success_rate)   
 
+        self.base_last5.push(self.base_actions[:, :3])
+        self.residual_last5.push(self.env_actions[:, :3])
+
         return terminated, time_out
 
     def _get_curr_successes(self, success_threshold):
@@ -687,8 +711,27 @@ class FactoryEnvResidual(DirectRLEnv):
         task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
-        grasp_successes = torch.where(grasp_dist < 0.01, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        close_gripper = torch.where(self.gripper.squeeze(-1) >= self.cfg_task.close_gripper, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        grasp_dist_satisfied = grasp_dist < 0.01
+        gripper_closing = self.gripper.squeeze(-1) > 0.1
+        gripper_closed = self.gripper.squeeze(-1) >= self.cfg_task.close_gripper
+        
+        # Activate grasp tracking when gripper starts closing with good grasp distance
+        self.grasp_active = torch.where(
+            torch.logical_and(gripper_closing, grasp_dist_satisfied),
+            torch.ones_like(self.grasp_active),
+            self.grasp_active
+        )
+        
+        # Deactivate if grasp distance lost while closing
+        self.grasp_active = torch.where(
+            torch.logical_and(gripper_closing, ~grasp_dist_satisfied),
+            torch.zeros_like(self.grasp_active),
+            self.grasp_active
+        )
+        
+        # Success = maintained grasp from start of closing until fully closed
+        grasp_successes = torch.logical_and(self.grasp_active, gripper_closed)
+        close_gripper = gripper_closed
 
         # Track held asset yaw rotation only for nut_thread task, only when task-engaged
         if self.cfg_task.name == "nut_thread":
@@ -824,10 +867,14 @@ class FactoryEnvResidual(DirectRLEnv):
         held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_rand)
         self.init_held_pos_obs_noise[env_ids] = held_asset_pos_noise
 
-        translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.05
-        self.xy_translation_noise[env_ids] = translation_noise
+        if self.vis_options["eval_mode"]:
+            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.0
+            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
+        else:
+            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.05
+            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(5.0)
 
-        yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(5.0)
+        self.xy_translation_noise[env_ids] = translation_noise
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
 
         held_pos = self.initial_poses["held_pos"][env_ids, self.episode_idx[env_ids]] # (num_resets, 3)
@@ -887,6 +934,7 @@ class FactoryEnvResidual(DirectRLEnv):
         noised_qpos = self.compute_ik_abs(sim_eef[:, :7], init_qpos)
         self._set_replay_default_pose(joints=noised_qpos, env_ids=env_ids) # compute intermediate values there
 
+        self.base_actions_agent.clear(env_ids)
         if not self.teleop_mode:
             self._compute_base_actions()
         
@@ -919,7 +967,10 @@ class FactoryEnvResidual(DirectRLEnv):
         self.ee_angvel_fd[env_ids, :] = 0.0
         self.ee_linvel_fd[env_ids, :] = 0.0
 
-        self.base_actions_agent.clear(env_ids)
+        self.base_last5.clear_envs(env_ids)
+        # self.base_last5.push(self.base_actions[env_ids, :3])  # initialize with current base actions
+        self.residual_last5.clear_envs(env_ids)
+        # self.residual_last5.push(self.base_actions[env_ids, :3])  # initialize with current residual actions
 
         # Reset held asset yaw rotation tracking (only for nut_thread task)
         if self.cfg_task.name == "nut_thread":
