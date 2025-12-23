@@ -716,7 +716,7 @@ class FactoryEnvResidual(DirectRLEnv):
         task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
-        grasp_dist_satisfied = grasp_dist < 0.005
+        grasp_dist_satisfied = grasp_dist < 0.01
         gripper_closing = self.gripper.squeeze(-1) > 0.1
         gripper_closed = self.gripper.squeeze(-1) >= self.cfg_task.close_gripper
         
