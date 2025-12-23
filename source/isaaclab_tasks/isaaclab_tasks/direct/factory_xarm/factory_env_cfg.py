@@ -99,7 +99,7 @@ class BaseActionRandCfg:
 
 @configclass
 class EnvOptionsCfg:
-    measure_force = True
+    measure_force = False
     enable_cameras = False
     
     verbose = False
