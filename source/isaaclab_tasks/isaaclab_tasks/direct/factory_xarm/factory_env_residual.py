@@ -109,6 +109,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.base_last5 = LastKPoints(self.num_envs, K=5, device=self.device)
         self.residual_last5 = LastKPoints(self.num_envs, K=5, device=self.device)
+        self.bad_insert = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
     def compute_ik_abs(
         self,
@@ -578,7 +579,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
             terminated |= self.bad_insert.bool()
-            self.basd_insert[:] = 0
+            self.bad_insert[:] = 0
 
         if self.cfg_task.name == "peg_insert":
             unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
@@ -715,7 +716,7 @@ class FactoryEnvResidual(DirectRLEnv):
         task_engaged = torch.logical_and(is_centered, is_close_or_below)
 
         grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
-        grasp_dist_satisfied = grasp_dist < 0.01
+        grasp_dist_satisfied = grasp_dist < 0.005
         gripper_closing = self.gripper.squeeze(-1) > 0.1
         gripper_closed = self.gripper.squeeze(-1) >= self.cfg_task.close_gripper
         
