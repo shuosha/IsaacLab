@@ -576,6 +576,10 @@ class FactoryEnvResidual(DirectRLEnv):
         terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold # to eliminate the case where held asset falls far away
         terminated |= self.ep_succeeded.bool()
 
+        if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
+            terminated |= self.bad_insert.bool()
+            self.basd_insert[:] = 0
+
         if self.cfg_task.name == "peg_insert":
             unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
             tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
@@ -762,6 +766,7 @@ class FactoryEnvResidual(DirectRLEnv):
         grasp_successes = torch.logical_and(grasp_successes, close_gripper)
         if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
             task_successes = torch.logical_and(task_successes, grasp_successes)
+            self.bad_insert = torch.logical_and(task_successes, ~grasp_successes)
         self.log(f"Grasp success: {grasp_successes.float().mean().item():.3f}")
         self.log(f"Task engaged: {task_engaged.float().mean().item():.3f}")
         self.log(f"Task success: {task_successes.float().mean().item():.3f}")
