@@ -93,9 +93,12 @@ class ObsRandCfg:
     fixed_asset_pos = [0.002, 0.002, 0.002]
     held_asset_pos = [0.002, 0.002, 0.002]
 
+    pos_aug = 0.02
+    rot_aug = 2.0
+
 @configclass
 class BaseActionRandCfg:
-    horizon = [7, 30]
+    horizon = [1, 15]
 
 @configclass
 class EnvOptionsCfg:

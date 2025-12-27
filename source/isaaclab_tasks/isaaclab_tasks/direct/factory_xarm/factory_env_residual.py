@@ -56,8 +56,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self.base_actions_agent = NearestNeighborBuffer(
                 factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
                 self.num_envs, 
-                min_horizon=1, 
-                max_horizon=15, 
+                min_horizon=self.cfg.base_rand.horizon[0], 
+                max_horizon=self.cfg.base_rand.horizon[1], 
                 device=self.device, 
                 pad=True # type: ignore
             )
@@ -65,8 +65,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self.base_actions_agent = NearestNeighborBuffer(
                 factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
                 self.num_envs, 
-                min_horizon=1, 
-                max_horizon=15, 
+                min_horizon=self.cfg.base_rand.horizon[0], 
+                max_horizon=self.cfg.base_rand.horizon[1], 
                 device=self.device, 
                 pad=True # type: ignore
             )
@@ -853,11 +853,12 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.enable_cameras:
             self.front_camera.reset(env_ids=env_ids)
 
-        self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-        self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-        self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-        self.mr[env_ids] = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-        self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+        if not self.vis_options["eval_mode"]:
+            self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.mr[env_ids] = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
+            self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
 
         # move to next episode
         self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
@@ -877,8 +878,8 @@ class FactoryEnvResidual(DirectRLEnv):
             translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.0
             yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
         else:
-            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.05
-            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(5.0)
+            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * self.cfg.obs_rand.pos_aug
+            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(self.cfg.obs_rand.rot_aug)
 
         self.xy_translation_noise[env_ids] = translation_noise
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
