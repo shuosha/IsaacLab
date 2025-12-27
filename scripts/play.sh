@@ -13,4 +13,4 @@ num_envs="${3:-1}"   # default to 1 if not provided
 CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/play.py \
     --task Isaac-Factory-Xarm-${task}-Residual \
     --num_envs ${num_envs} \
-    --checkpoint ${ckpt_path}/nn/FactoryXarm.pth --enable_cameras
+    --checkpoint ${ckpt_path}/nn/FactoryXarm.pth --headless
