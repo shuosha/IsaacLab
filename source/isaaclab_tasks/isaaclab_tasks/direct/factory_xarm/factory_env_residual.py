@@ -77,12 +77,7 @@ class FactoryEnvResidual(DirectRLEnv):
             # assert self.num_envs == self.total_episodes, "num_envs must equal total_episodes in eval_mode"
             self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
         self.episode_idx = torch.randint(0, self.total_episodes, (self.num_envs,), device=self.device)
-        # self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
-
-        # overwrite cfg
-        # self.cfg.episode_length_s = self.base_actions_agent.get_max_episode_length() * (self.cfg.sim.dt * self.cfg.decimation)
-        # self.max_per_eps_length = self.base_actions_agent.get_max_per_episode_length() # (num_eps, )
-
+        
         self.initial_poses = torch.load(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.initial_poses_hf_file)) # dict each of shape (tot_eps, dim) # type: ignore
         self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
 
