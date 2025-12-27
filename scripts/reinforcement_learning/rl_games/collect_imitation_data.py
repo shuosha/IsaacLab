@@ -65,6 +65,7 @@ import torch
 import numpy as np
 from pathlib import Path
 from PIL import Image
+from tqdm import tqdm
 
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
@@ -248,6 +249,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
+        "eval_mode": False,        
     }
     env_cfg.env_options.verbose = False
     env_cfg.env_options.enable_cameras = args_cli.enable_cameras
@@ -349,7 +351,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
 
     max_episodes = int(args_cli.num_episodes)
+    print(f"[INFO] Starting data collection. Target: {max_episodes} successful episodes.\n")
 
+    pbar = tqdm(total=max_episodes, desc="Episodes collected", unit="ep")
+    
     while simulation_app.is_running() and collector.episodes_collected < max_episodes:
         start_time = time.time()
 
@@ -371,6 +376,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             dones_np = dones.detach().cpu().numpy()
             succ_np = success_tensor.detach().cpu().numpy()
 
+            prev_collected = collector.episodes_collected
             for env_id in range(num_envs):
                 done = bool(dones_np[env_id].item())
                 success = bool(succ_np[env_id].item())
@@ -388,6 +394,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
                 if done:
                     collector.end_episode(env_id, success)
+                    if collector.episodes_collected > prev_collected:
+                        pbar.update(collector.episodes_collected - prev_collected)
+                        prev_collected = collector.episodes_collected
+    
+    pbar.close()
 
     print(f"[INFO] Collected {collector.episodes_collected} successful episodes to {args_cli.output_dir}")
     print(f"[INFO] Played {collector.episodes_played} total episodes (images saved for all played episodes).")

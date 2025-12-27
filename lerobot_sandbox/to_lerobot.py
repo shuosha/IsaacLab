@@ -30,10 +30,14 @@ def read_obs(json_path: str) -> dict[str, torch.Tensor]:
     
     state = torch.cat([
         fingertip_pos, fingertip_quat, gripper,
-        fingertip_pos_rel_fixed, fingertip_pos_rel_held,
         ee_linvel, ee_angvel
-    ], dim=0)  # (20,)
-    return {"state": state}
+    ], dim=0)  # (14,)
+
+    environment_state = torch.cat([
+        fingertip_pos_rel_fixed,
+        fingertip_pos_rel_held
+    ], dim=0)  # (6,)
+    return {"state": state, "environment_state": environment_state}
 
 
 def read_act(json_path: str) -> dict[str, torch.Tensor]:
@@ -57,14 +61,17 @@ def build_features() -> dict:
                 "names": {"waypoint": ["fingertip_pos_x", "fingertip_pos_y", "fingertip_pos_z",
                                        "fingertip_quat_x", "fingertip_quat_y", "fingertip_quat_z", "fingertip_quat_w",
                                        "gripper"]}},
-        "observation.state": {"dtype": "float32", "shape": (20,),
+        "observation.state": {"dtype": "float32", "shape": (14,),
                             "names": {"waypoint": ["fingertip_pos_x", "fingertip_pos_y", "fingertip_pos_z",
                                                    "fingertip_quat_x", "fingertip_quat_y", "fingertip_quat_z", "fingertip_quat_w",
                                                    "gripper",
-                                                   "fingertip_pos_rel_fixed_x", "fingertip_pos_rel_fixed_y", "fingertip_pos_rel_fixed_z",
-                                                   "fingertip_pos_rel_held_x", "fingertip_pos_rel_held_y", "fingertip_pos_rel_held_z",
                                                    "ee_linvel_x", "ee_linvel_y", "ee_linvel_z",
                                                    "ee_angvel_x", "ee_angvel_y", "ee_angvel_z"]}},
+        "observation.environment_state": {"dtype": "float32", "shape": (6,), 
+                                        "names": {
+                                            "relative_positions": ["fingertip_to_fixed_x", "fingertip_to_fixed_y", "fingertip_to_fixed_z",
+                                                                   "fingertip_to_held_x", "fingertip_to_held_y", "fingertip_to_held_z"]
+                                        }},
         "next.done": {"dtype": "bool", "shape": (1,), "names": None},
     }
 
@@ -97,6 +104,7 @@ def convert_to_lerobot(input_dir: str, repo_id: str, fps: int, robot_type: str,
             frame = {
                 "action":            act_dict["action"].numpy(),
                 "observation.state": obs_dict["state"].numpy(),
+                "observation.environment_state": obs_dict["environment_state"].numpy(),
                 "next.done":         np.array([idx == len(timesteps) - 1], dtype=bool),
                 "task":        str(task_name),
             }
@@ -120,9 +128,9 @@ def convert_to_lerobot(input_dir: str, repo_id: str, fps: int, robot_type: str,
 # -------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Convert residual mode robot trajectories to LeRobot dataset.")
-    parser.add_argument("-i", "--input_dir", required=True, help="Root folder with episode_*/")
-    parser.add_argument("--repo-id", required=True, help="HuggingFace repo ID for LeRobotDataset")
-    parser.add_argument("--task_name", default="insert_rope", help="Task name for LeRobotDataset")
+    parser.add_argument("input_dir", help="Root folder with episode_*/")
+    parser.add_argument("repo_id", help="HuggingFace repo ID for LeRobotDataset")
+    parser.add_argument("task_name", default="insert_rope", help="Task name for LeRobotDataset")
     parser.add_argument("--fps", type=int, default=15, help="Frames per second")
     parser.add_argument("--robot-type", default="xarm", help="Robot type identifier")
     args = parser.parse_args()

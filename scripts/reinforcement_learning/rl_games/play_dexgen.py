@@ -51,6 +51,7 @@ import os
 import random
 import time
 import torch
+from tqdm import tqdm
 
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
@@ -86,6 +87,12 @@ def transform_obs(obs):
         "observation.environment_state": environment_state,
     }
 
+def transform_action(action):
+    """transfer from lerobot format to env flatten tensor"""
+
+    return {
+        "action": action
+    }
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -103,6 +110,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
+        "eval_mode": False,         # cyan tint
     }
     env_cfg.env_options.verbose = False
 
@@ -166,32 +174,61 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(obs, dict):
         obs = obs["obs"]
     actions = obs[:,:8].clone()
+
+    imitation_only = False
+    tot_eps = 0
+    tot_suc = 0
+    tot_timeout = 0
+    tot_dist_term = 0
+    tot_task_term = 0
+    terminal_eps = 500
+    pbar = tqdm(total=terminal_eps, desc="Rollouts", unit="ep")
     
     timestep = 0
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
-    while simulation_app.is_running():
+    while simulation_app.is_running() and tot_eps < terminal_eps:
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
             # env stepping
-            obs, _, dones, _ = env.step(actions)
+            obs, _, dones, infos = env.step(actions)
             if isinstance(obs, dict):
                 obs = obs["obs"]
 
             if dones.any():
                 policy.reset()
 
+            tot_eps += infos["EVAL_eps_done"]
+            tot_suc += infos["EVAL_success"]
+            tot_timeout += infos["EVAL_time_out"]
+            tot_dist_term += infos["EVAL_dist_term"]
+            tot_task_term += infos["EVAL_task_term"]
+
+            # update progress toward terminal_eps using env-reported episode completions
+            eps_done = int(infos.get("EVAL_eps_done", 0))
+            if eps_done > 0:
+                update_val = min(eps_done, max(0, terminal_eps - pbar.n))
+                if update_val > 0:
+                    pbar.update(update_val)
+                # print totals after each progress update
+                print(
+                    f"[EVAL] eps: {tot_eps}/{terminal_eps} \n " +
+                    f" sr {tot_suc/tot_eps:.3f} | success: {tot_suc} | time_out: {tot_timeout} | dist_term: {tot_dist_term} | task_term: {tot_task_term}"
+                )
+
+            # base actions
+            base_actions = env.unwrapped.base_actions
+
             # convert obs to agent format
             obs_lerobot = transform_obs(obs)
-            actions = policy.act(obs_lerobot)
-            print("curr pos:", obs[:, :3])
-            print("goal pos:", actions[0, :3])
+            if imitation_only:
+                actions = policy.act(obs_lerobot)
+            else:
+                actions = policy.act(obs_lerobot, ref_action=base_actions)
         
-        time.sleep(0.001)  # yield to other threads
-
         if args_cli.video:
             timestep += 1
             # exit the play loop after recording one video
@@ -203,6 +240,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # if args_cli.real_time and sleep_time > 0:
         #     time.sleep(sleep_time)
 
+    pbar.close()
     # close the simulator
     env.close()
 

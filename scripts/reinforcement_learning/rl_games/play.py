@@ -82,6 +82,7 @@ from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
+from tqdm import tqdm
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
@@ -97,13 +98,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.env_options.vis_options = {
-        "action_goals": True,      # red, blue, green triangle
-        "training_data": True,     # yellow + purple
-        "rewards": True,           # pink circles/shapes
+        "action_goals": False,      # red, blue, green triangle
+        "training_data": False,     # yellow + purple
+        "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
+        "eval_mode": False,         # cyan tint
     }
-    env_cfg.env_options.verbose = True
+    env_cfg.env_options.verbose = False
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -199,6 +201,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obs = env.reset()
     if isinstance(obs, dict):
         obs = obs["obs"]
+    tot_eps = 0
+    tot_suc = 0
+    terminal_eps = 1000
+    pbar = tqdm(total=terminal_eps, desc="Rollouts", unit="ep")
     timestep = 0
     # required: enables the flag for batched observations
     _ = agent.get_batch_size(obs, 1)
@@ -219,6 +225,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
             obs, _, dones, _ = env.step(actions)
+            if dones.any():
+                completed = dones.sum().item()
+                succeeded = env.unwrapped.ep_succeeded[dones].sum().item()
+
+                tot_eps += completed
+                tot_suc += succeeded
+
+                update_val = min(completed, max(0, terminal_eps - pbar.n))
+                if update_val > 0:
+                    pbar.update(update_val)
+
+                success_rate = tot_suc / tot_eps if tot_eps > 0 else 0.0
+                pbar.set_postfix({"success_rate": f"{success_rate:.3f}"})
 
             # perform operations for terminated episodes
             if len(dones) > 0:
@@ -232,11 +251,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if timestep == args_cli.video_length:
                 break
 
-        # time delay for real-time evaluation
-        sleep_time = dt - (time.time() - start_time)
-        if args_cli.real_time and sleep_time > 0:
-            time.sleep(sleep_time)
+        # # time delay for real-time evaluation
+        # sleep_time = dt - (time.time() - start_time)
+        # if args_cli.real_time and sleep_time > 0:
+        #     time.sleep(sleep_time)
 
+    pbar.close()
     # close the simulator
     env.close()
 

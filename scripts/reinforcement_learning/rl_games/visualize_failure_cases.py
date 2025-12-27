@@ -381,7 +381,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             ep_succeeded_dict[f"episode_{env_id:04d}"] = False
     
     # Save meta.json
-    meta_path = os.path.join(output_path, "meta.json")
+    meta_path = os.path.join(output_path, "no_meta.json")
     with open(meta_path, "w") as f:
         json.dump(ep_succeeded_dict, f, indent=2)
     print(f"[INFO] Saved metadata to: {meta_path}")
