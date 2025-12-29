@@ -72,4 +72,6 @@ tests/
 
 assets/
 data/
-hf_data/
+rrl_data/
+rrl_data_new/
+hf_git/

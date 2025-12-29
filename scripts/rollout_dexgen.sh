@@ -13,4 +13,5 @@ num_envs="${3:-1}"   # default to 1 if not provided
 CUDA_VISIBLE_DEVICES=0 python scripts/reinforcement_learning/rl_games/play_dexgen.py \
     --task Isaac-Factory-Xarm-${task}-DexGen \
     --num_envs ${num_envs} \
-    --policy_path ${ckpt_path} --headless
+    --policy_path ${ckpt_path} --headless \
+    --imitation_only

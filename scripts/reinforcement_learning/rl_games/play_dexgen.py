@@ -28,6 +28,7 @@ parser.add_argument(
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 parser.add_argument("--policy_path", type=str, required=True, help="Path to the trained policy checkpoint.")
+parser.add_argument("--imitation_only", action="store_true", default=False, help="Use imitation only policy.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -167,7 +168,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
-    policy = DPWrapper(args_cli.policy_path, dataset_id="1218_peginsert_1000_v1")
+    policy = DPWrapper(args_cli.policy_path)
 
     # reset environment
     obs = env.reset()
@@ -175,7 +176,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         obs = obs["obs"]
     actions = obs[:,:8].clone()
 
-    imitation_only = False
+    imitation_only = args_cli.imitation_only
     tot_eps = 0
     tot_suc = 0
     tot_timeout = 0

@@ -9,6 +9,7 @@
 
 import argparse
 import sys
+import cv2
 
 from isaaclab.app import AppLauncher
 
@@ -19,23 +20,11 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-parser.add_argument(
-    "--use_pretrained_checkpoint",
-    action="store_true",
-    help="Use the pre-trained checkpoint from Nucleus.",
-)
-parser.add_argument(
-    "--use_last_checkpoint",
-    action="store_true",
-    help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
-)
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -53,7 +42,6 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-
 import gymnasium as gym
 import math
 import os
@@ -61,6 +49,9 @@ import random
 import time
 import torch
 import numpy as np
+
+np.set_printoptions(precision=3, suppress=True)
+torch.set_printoptions(precision=3, sci_mode=False)
 
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
@@ -85,6 +76,15 @@ import isaacsim.core.utils.torch as torch_utils
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab.utils.math import (
+    apply_delta_pose,
+    combine_frame_transforms,
+    compute_pose_error,
+    matrix_from_quat,
+    quat_mul,
+    quat_from_matrix,
+    subtract_frame_transforms,
+)
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 def load_npz_dict(path):
@@ -102,9 +102,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     task_name = args_cli.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
 
+    # load traj & object data
+    input_path = "rrl_data/new_gearmesh_train_data"
+    output_path = os.path.join(input_path, "sim_replay")
+    teleop_data = np.load(env_cfg.task.real_teleop_data_path, allow_pickle=True).item()
+
+    num_envs = len(teleop_data)
+    eps_idx = list(range(num_envs))
+
     # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.scene.num_envs = num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.env_options.ctrl_dmr = False
+    env_cfg.env_options.obs_dmr = False
+    env_cfg.env_options.data_aug = False
+    env_cfg.env_options.step_eps = False
+    env_cfg.env_options.offline_base = True
+    env_cfg.env_options.measure_force = True
+    env_cfg.env_options.enable_cameras = True
+    env_cfg.env_options.verbose = False
+
+    lengths = [len(teleop_data[f"episode_{e:04d}"]["obs.gripper"]) for e in eps_idx]
+    horizon = env_cfg.episode_length_s * 15
+
+    T = min(max(lengths), horizon-1)
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -114,34 +135,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # set the environment seed (after multi-gpu config for updated rank from agent seed)
     # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg["params"]["seed"]
-
-    # # specify directory for logging experiments
-    # log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
-    # log_root_path = os.path.abspath(log_root_path)
-    # print(f"[INFO] Loading experiment from directory: {log_root_path}")
-    # # find checkpoint
-    # if args_cli.use_pretrained_checkpoint:
-    #     resume_path = get_published_pretrained_checkpoint("rl_games", train_task_name)
-    #     if not resume_path:
-    #         print("[INFO] Unfortunately a pre-trained checkpoint is currently unavailable for this task.")
-    #         return
-    # elif args_cli.checkpoint is None:
-    #     # specify directory for logging runs
-    #     run_dir = agent_cfg["params"]["config"].get("full_experiment_name", ".*")
-    #     # specify name of checkpoint
-    #     if args_cli.use_last_checkpoint:
-    #         checkpoint_file = ".*"
-    #     else:
-    #         # this loads the best checkpoint
-    #         checkpoint_file = f"{agent_cfg['params']['config']['name']}.pth"
-    #     # get path to previous checkpoint
-    #     resume_path = get_checkpoint_path(log_root_path, run_dir, checkpoint_file, other_dirs=["nn"])
-    # else:
-    #     resume_path = retrieve_file_path(args_cli.checkpoint)
-    # log_dir = os.path.dirname(os.path.dirname(resume_path))
-
-    # # set the log directory for the environment (works for all environment types)
-    # env_cfg.log_dir = log_dir
 
     # wrap around environment for rl-games
     rl_device = agent_cfg["params"]["config"]["device"]
@@ -184,61 +177,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create runner from rl-games
     runner = Runner()
     runner.load(agent_cfg)
-    # # obtain the agent from the runner
-    # agent: BasePlayer = runner.create_player()
-    # agent.restore(resume_path)
-    # agent.reset()
 
     dt = env.unwrapped.step_dt
 
-    # load traj & object data
-    eps_idx_key = "episode_0003"
-
-    # load obj states
-    obj_states_path: str = "/home/shuo/projects/IsaacLab/logs/data/obj_states/object_states.npz"
-    obj_data = np.load(obj_states_path, allow_pickle=True)
-    gear2base_mat = obj_data[f"{eps_idx_key}"][0]
-    gear2base_pos = gear2base_mat[:3, 3]
-    gear2base_quat = np.roll(R.from_matrix(gear2base_mat[:3, :3]).as_quat(), 1)
-    import pdb; pdb.set_trace()
-    gearbase2base_mat = obj_data[f"{eps_idx_key}"][1]
-    gearbase2base_pos = gearbase2base_mat[:3, 3]
-    gearbase2base_quat = np.roll(R.from_matrix(gearbase2base_mat[:3, :3]).as_quat(), 1)
-
-    # load trajectories
-    data_path: str = "logs/data/robot_trajectories.npz"
-    data = np.load(data_path, allow_pickle=True)
-
-    pos = torch.from_numpy(data[f"{eps_idx_key}/obs.eef_pos"]).to(env.device)
-    quat = torch.from_numpy(data[f"{eps_idx_key}/obs.eef_quat"]).to(env.device)
-    qpos = data[f"{eps_idx_key}/obs.qpos"]
-
-    T = pos.shape[0]
     # reset environment
     obs = env.reset()
+    obs = obs["obs"]
 
-    # set to initial pose
-    env.unwrapped._set_franka_to_default_pose([qpos[0].tolist()], env_ids=torch.tensor([0], device=env.device))
-    env.unwrapped._set_gear_mesh_state(
-        [gear2base_pos.tolist()], 
-        [gear2base_quat.tolist()], 
-        [gearbase2base_pos.tolist()], 
-        [gearbase2base_quat.tolist()],
-        env_ids=torch.tensor([0], device=env.device)
-    )
-    obs = env.unwrapped._get_observations()
-    obs = obs["policy"]
+    actions = torch.zeros((env.unwrapped.num_envs, env_cfg.residual_action_space), device=rl_device)
 
-    out_eef_pos = []
-    out_eef_quat = []
-    out_qpos = []
+    N = len(eps_idx)
+
+    obs_fingertip_pos  = [[] for _ in range(N)]
+    obs_fingertip_quat = [[] for _ in range(N)]
+    obs_gripper  = [[] for _ in range(N)]
+
+    obs_fingertip_pos_rel_fixed  = [[] for _ in range(N)]
+    obs_fingertip_pos_rel_held = [[] for _ in range(N)]
+    obs_ee_linvel_fd = [[] for _ in range(N)]
+    obs_ee_angvel_fd = [[] for _ in range(N)]
+
+    act_fingertip_pos  = [[] for _ in range(N)]
+    act_fingertip_quat = [[] for _ in range(N)]
+    act_gripper  = [[] for _ in range(N)]
+
+    for i in range(len(eps_idx)):
+        out_path = f"{output_path}/episode_{eps_idx[i]:04d}"
+        os.makedirs(out_path, exist_ok=True)
+        cam_path = os.path.join(out_path, "camera_0", "rgb")
+        os.makedirs(cam_path, exist_ok=True)
 
     timestep = 0
-    # required: enables the flag for batched observations
-    _ = agent.get_batch_size(obs, 1)
-    # initialize RNN states if used
-    if agent.is_rnn:
-        agent.init_rnn()
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
@@ -247,41 +216,52 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            # convert obs to agent format
-            eef_pos = pos[timestep].unsqueeze(0)
-            eef_quat = quat[timestep].unsqueeze(0)
-            # fingertip_pos = torch_utils.tf_combine(
-            #     eef_quat,
-            #     eef_pos,
-            #     torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device),
-            #     torch.tensor([[0.0, 0.0, 0.17]], device=env.device),
-            # )[1]
-            actions = torch.cat([eef_pos, eef_quat], dim=-1)
+            for i in range(len(eps_idx)):
+                if timestep >= lengths[i]:
+                    continue
+                cam_path = f"{output_path}/episode_{eps_idx[i]:04d}/camera_0/rgb"
+                img = env.unwrapped.front_rgb[i].cpu().numpy()
+                img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                ok = cv2.imwrite(os.path.join(cam_path, f"{timestep:06d}.jpg"), img_bgr)
+                if not ok:
+                    print(f"[ERROR] imwrite failed: ep={eps_idx[i]} t={timestep} path={cam_path}")
 
-            out_eef_pos.append(obs[0,:3].cpu().numpy())
-            out_eef_quat.append(obs[0,3:7].cpu().numpy())
-            out_qpos.append(obs[0,7:].cpu().numpy())
+                obs_fingertip_pos[i].append(obs[i, :3].cpu().numpy())
+                obs_fingertip_quat[i].append(obs[i, 3:7].cpu().numpy())
+                obs_gripper[i].append(obs[i, 7:8].cpu().numpy())
 
-            print("------------ Step Info -----------")
-            print("Currently at timestep:", timestep, "/", T)
-            print("curr task space pose:", obs[:,:7].cpu().numpy())
-            print("goal task space pose:", actions.cpu().numpy())
-            print("---------------------------------")
+                obs_fingertip_pos_rel_fixed[i].append(obs[i, 8:11].cpu().numpy())
+                obs_fingertip_pos_rel_held[i].append(obs[i, 11:14].cpu().numpy())
+
+                obs_ee_linvel_fd[i].append(obs[i, 14:17].cpu().numpy())
+                obs_ee_angvel_fd[i].append(obs[i, 17:20].cpu().numpy())
+
+                act_fingertip_pos[i].append(obs[i, 20:23].cpu().numpy())
+                act_fingertip_quat[i].append(obs[i, 23:27].cpu().numpy())
+                act_gripper[i].append(obs[i, 27:28].cpu().numpy())
+
+            if len(eps_idx) == 1:
+                print("------------ Step Info (single env) -----------")
+                print("Currently at timestep:", timestep, "/", T)
+                print("curr task space pose:", obs[:,:7].cpu().numpy())
+                print("goal task space pose:", actions.cpu().numpy())
+                print("---------------------------------")
+            else:
+                print("------------ Step Info (multi env) -----------")
+                print("Currently at timestep:", timestep, "/", T)
+                # print("pos err:", torch.norm(obs[:,:3]-actions[:,:3], dim=-1).cpu().numpy())
+                # print("rot err:", quat_geodesic_angle(obs[:,3:7], actions[:,3:7]).cpu().numpy())
+                # print("grip err:", torch.abs(obs[:,7:8]-actions[:,7:8]).cpu().numpy())
+                print("---------------------------------")
 
             # env stepping
             obs, _, dones, _ = env.step(actions)
             obs = obs["obs"]
-            timestep += 1
 
+            timestep += 1
             if timestep >= T:
                 break
 
-            # perform operations for terminated episodes
-            if len(dones) > 0:
-                # reset rnn state for terminated episodes
-                if agent.is_rnn and agent.states is not None:
-                    for s in agent.states:
-                        s[:, dones, :] = 0.0
         if args_cli.video:
             # exit the play loop after recording one video
             if timestep == args_cli.video_length:
@@ -295,17 +275,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # close the simulator
     env.close()
 
-    out_data = {
-        f"{eps_idx_key}/obs.eef_pos": np.array(out_eef_pos),
-        f"{eps_idx_key}/obs.eef_quat": np.array(out_eef_quat),
-        f"{eps_idx_key}/obs.qpos": np.array(out_qpos),
-    }
+    out_data = {}
+    for i, ep in enumerate(eps_idx):
+        k = f"episode_{ep:04d}"
+        out_data[k] = {
+            "obs.fingertip_pos":     np.stack(obs_fingertip_pos[i], axis=0),      # (Li, 3)
+            "obs.fingertip_quat":    np.stack(obs_fingertip_quat[i], axis=0),     # (Li, 4)
+            "obs.gripper":     np.stack(obs_gripper[i], axis=0),      # (Li, 1)
+            "obs.fingertip_pos_rel_fixed":  np.stack(obs_fingertip_pos_rel_fixed[i], axis=0),      # (Li, 3)
+            "obs.fingertip_pos_rel_held":  np.stack(obs_fingertip_pos_rel_held[i], axis=0),      # (Li, 3)
+            "obs.ee_linvel_fd":  np.stack(obs_ee_linvel_fd[i], axis=0),      # (Li, 3)
+            "obs.ee_angvel_fd":  np.stack(obs_ee_angvel_fd[i], axis=0),      # (Li, 3)
+            "action.fingertip_pos":  np.stack(act_fingertip_pos[i], axis=0),      # (Li, 3)
+            "action.fingertip_quat": np.stack(act_fingertip_quat[i], axis=0),     # (Li, 4)
+            "action.gripper":  np.stack(act_gripper[i], axis=0),      # (Li, 1)
+        }
 
-    import pdb; pdb.set_trace()
-
-    out_path = "logs/data/sim_trajs.npz"
-    np.savez_compressed(out_path, **out_data)
-    print(f"[INFO] Saved simulated trajectories to: {out_path}")
+    os.makedirs(os.path.join(input_path, "data"), exist_ok=True)
+    np.save(os.path.join(input_path, "data", "sim_replay_data.npy"), out_data)
+    print(f"[INFO] Saved simulated trajectories to: {os.path.join(input_path, 'data', 'sim_replay_data.npy')}")
 
 
 if __name__ == "__main__":

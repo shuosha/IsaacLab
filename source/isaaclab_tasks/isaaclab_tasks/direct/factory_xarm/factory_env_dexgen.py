@@ -854,8 +854,8 @@ class FactoryEnvDexGen(DirectRLEnv):
             translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.0
             yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
         else:
-            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.05
-            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(5.0)
+            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * self.cfg.obs_rand.pos_aug
+            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(self.cfg.obs_rand.rot_aug)
 
         self.xy_translation_noise[env_ids] = translation_noise
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
