@@ -98,13 +98,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.env_options.vis_options = {
-        "action_goals": False,      # red, blue, green triangle
-        "training_data": False,     # yellow + purple
-        "rewards": False,           # pink circles/shapes
-        "object_obs": False,        # coordinate frames
+        "action_goals": True,      # red, blue, green triangle
+        "training_data": True,     # yellow + purple
+        "rewards": True,           # pink circles/shapes
+        "object_obs": True,        # coordinate frames
         "failed_envs": False,      # red tint
-        "eval_mode": False,         # cyan tint
     }
+    env_cfg.env_options.ctrl_dmr = True
+    env_cfg.env_options.obs_dmr = True
+    env_cfg.env_options.data_aug = True
+    env_cfg.env_options.step_eps = True
+    env_cfg.env_options.offline_base = False
+    env_cfg.env_options.measure_force = True
+    # env_cfg.env_options.enable_cameras = True
     env_cfg.env_options.verbose = False
 
     # randomly sample a seed if seed = -1

@@ -33,7 +33,7 @@ class HeldAssetCfg:
 
 @configclass
 class RobotCfg:
-    hf_repo = "shashuo0104/rrl_training_data"
+    hf_repo = "shashuo0104/rrl_data_v2"
     robot_hf_file: str = "assets/robot/xarm7_gripper.usd"
     robot_usd: str = ""
     xarm_fingerpad_length: float = 0.04
@@ -42,7 +42,7 @@ class RobotCfg:
 
 @configclass
 class FactoryTask:
-    hf_repo = "shashuo0104/rrl_training_data"
+    hf_repo = "shashuo0104/rrl_data_v2"
     robot_cfg: RobotCfg = RobotCfg()
     name: str = ""
     duration_s = 5.0
@@ -212,8 +212,7 @@ class MediumGear(HeldAssetCfg):
 
 @configclass
 class GearMesh(FactoryTask):
-    initial_poses_hf_file: str = "gearmesh_train_data/data/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_hf_file: str = "gearmesh_train_data/data/real_teleop_trajectories.npy" # NOTE: get this from teleop
+    train_data_hf_file: str = "data/gearmesh_train_data.npy"
 
     close_gripper: float = 0.69
     name = "gear_mesh"

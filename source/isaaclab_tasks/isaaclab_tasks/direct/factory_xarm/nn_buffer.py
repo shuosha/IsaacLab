@@ -14,7 +14,9 @@ class NearestNeighborBuffer:
                  min_horizon: int = 1,
                  max_horizon: int = 15,
                  device: str | torch.device = "cpu",
-                 pad: bool = True):
+                 pad: bool = True,
+                 offline_base: bool = False,
+                 ):
         self._device = torch.device(device)
 
         if min_horizon < 1:
@@ -54,10 +56,11 @@ class NearestNeighborBuffer:
             return out
 
         self._obs_pos  = pad_last("obs.fingertip_pos", 3)
-        self._obs_quat = pad_last("obs.eef_quat", 4)
+        self._obs_quat = pad_last("obs.fingertip_quat", 4)
         self._obs_grip = pad_last("obs.gripper", 1)
+        self._obs_held_pos = self._obs_pos - pad_last("obs.fingertip_pos_rel_held", 3)
         self._act_pos  = pad_last("action.fingertip_pos", 3)
-        self._act_quat = pad_last("action.eef_quat", 4)
+        self._act_quat = pad_last("action.fingertip_quat", 4)
         self._act_grip = pad_last("action.gripper", 1)
         self._mask     = (torch.arange(T, device=self._device)
                           .expand(len(eps), T) < lengths[:, None])
@@ -80,6 +83,9 @@ class NearestNeighborBuffer:
         print(f"Loaded {len(eps)} episodes; max length {T} on {self._device}. "
               f"Horizon in [{self._min_horizon}, {self._max_horizon}].")
 
+        self._replay_mode = bool(offline_base)
+        self._replay_ptr = torch.zeros(num_envs, dtype=torch.long, device=self._device) 
+
 
     # --- public helpers ---
 
@@ -101,36 +107,42 @@ class NearestNeighborBuffer:
         env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device)
         self._q_ptr[env_ids] = 0
         self._q_len[env_ids] = 0
+        self._replay_ptr[env_ids] = 0
 
     # --- core NN ---
 
-    def _nn_indices(self, eidx, pos, quat=None, grip=None, verbose=False):
+    def _nn_indices(self, eidx, pos, quat=None, grip=None, held_pos=None, verbose=False):
         # All tensors already on self._device
         obs_p = self._obs_pos[eidx]
         obs_q = self._obs_quat[eidx]
         obs_g = self._obs_grip[eidx]
+        obs_held_p = self._obs_held_pos[eidx]
         mask  = self._mask[eidx]
 
         pos_term  = 5 * torch.norm(obs_p - pos[:, None, :], dim=-1)
         ang_term  = torch.zeros_like(pos_term)
         grip_term = torch.zeros_like(pos_term)
+        held_term = torch.zeros_like(pos_term)
 
         if quat is not None:
             ang_term = torch.rad2deg(
                 quat_geodesic_angle(obs_q, quat[:, None, :])
             ) / 50
         if grip is not None:
-            grip_term = 5 * (obs_g.squeeze(-1) - grip.view(-1, 1)).abs()
+            grip_term = 0.01 * (obs_g.squeeze(-1) - grip.view(-1, 1)).abs()
+        if held_pos is not None:
+            held_term  = 1000 * torch.norm(obs_held_p - held_pos[:, None, :], dim=-1)
 
-        dist = (pos_term + ang_term + grip_term).masked_fill(~mask, float("inf"))
+        dist = (pos_term + ang_term + grip_term + held_term).masked_fill(~mask, float("inf"))
         t0   = dist.argmin(dim=1)
         L    = mask.long().sum(dim=1)
 
         if verbose:
             mmean = lambda x: x.masked_fill(~mask, torch.nan).nanmean().item()
-            print(f"[NN contrib] pos_cm/10: {mmean(pos_term):.3f}, "
+            print(f"[NN contrib] pos_cm*10: {mmean(pos_term):.3f}, "
                   f"ang_deg/10: {mmean(ang_term):.3f}, "
-                  f"grip_L1*2: {mmean(grip_term):.3f}")
+                  f"grip_L1*2: {mmean(grip_term):.3f}, "
+                  f"held_cm*10: {mmean(held_term):.3f}")
         return t0, L
 
     @torch.no_grad()
@@ -139,10 +151,29 @@ class NearestNeighborBuffer:
                     pos: torch.Tensor,
                     quat: torch.Tensor | None = None,
                     grip: torch.Tensor | None = None,
+                    held_pos: torch.Tensor | None = None,
                     verbose: bool = False) -> torch.Tensor:
         # ... (device checks etc. unchanged)
 
         N = pos.shape[0]
+        
+        # -----------------------------
+        # Replay mode: open-loop actions from t=0
+        # -----------------------------
+        if self._replay_mode:
+            # gather per-env step indices, clamped to episode length-1
+            L = self._lengths[eidx]  # (N,)
+            t = torch.minimum(self._replay_ptr[:N], (L - 1).clamp(min=0))  # (N,)
+
+            # gather actions at time t for each env
+            a_pos  = self._act_pos[eidx, t, :]   # (N,3)
+            a_quat = self._act_quat[eidx, t, :]  # (N,4)
+            a_grip = self._act_grip[eidx, t, :]  # (N,1)
+            out = torch.cat([a_pos, a_quat, a_grip], dim=-1)  # (N,8)
+
+            # advance pointer only if not past the true episode end
+            self._replay_ptr[:N] = torch.minimum(self._replay_ptr[:N] + 1, (L - 1).clamp(min=0))
+            return out
 
         if self._queued is None:
             self._queued = torch.empty(
@@ -163,6 +194,7 @@ class NearestNeighborBuffer:
                 pos[ids],
                 None if quat is None else quat[ids],
                 None if grip is None else grip[ids],
+                None if held_pos is None else held_pos[ids],
                 verbose,
             )
 
@@ -245,6 +277,7 @@ class NearestNeighborBuffer:
         pos: torch.Tensor,
         quat: torch.Tensor | None = None,
         grip: torch.Tensor | None = None,
+        held_pos: torch.Tensor | None = None,
         verbose: bool = False,
         return_idx: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
@@ -282,6 +315,7 @@ class NearestNeighborBuffer:
             pos=pos,
             quat=quat,
             grip=grip,
+            held_pos=held_pos,
             verbose=verbose,
         )  # t0: (N,)
 
@@ -300,6 +334,7 @@ class NearestNeighborBuffer:
         pos: torch.Tensor,
         quat: torch.Tensor | None = None,
         grip: torch.Tensor | None = None,
+        held_pos: torch.Tensor | None = None,
         verbose: bool = False,
         return_idx: bool = False,
     ) -> (
@@ -342,6 +377,7 @@ class NearestNeighborBuffer:
             pos=pos,
             quat=quat,
             grip=grip,
+            held_pos=held_pos,
             verbose=verbose,
         )  # t0: (N,)
 

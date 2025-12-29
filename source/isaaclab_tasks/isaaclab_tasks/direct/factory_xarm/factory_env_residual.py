@@ -29,14 +29,19 @@ import pytorch_kinematics as pk
 class FactoryEnvResidual(DirectRLEnv):
     cfg: FactoryEnvCfg
 
-    def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):        
+        self.cfg_task = cfg.task
+        if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
+            self.residual_obs_order = cfg.residual_obs_order + ["base_fingertip_pos", "base_fingertip_quat"]
+        if self.cfg_task.name == "nut_thread":
+            self.residual_obs_order = cfg.residual_obs_order + ["base_fingertip_pos"]
+
         # Update number of obs/states
-        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.residual_obs_order])
+        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in self.residual_obs_order])
         cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.residual_state_order])
         cfg.action_space = cfg.residual_action_space # 7
         cfg.observation_space += cfg.action_space
         cfg.state_space += cfg.action_space
-        self.cfg_task = cfg.task
 
         super().__init__(cfg, render_mode, **kwargs)
 
@@ -45,6 +50,33 @@ class FactoryEnvResidual(DirectRLEnv):
         self._set_default_dynamics_parameters()
         self._init_residual_policy_buffers()
 
+    def build_init_state(self, data: str, dtype=torch.float32):
+        """
+        Returns:
+        init: (num_eps, 13) torch tensor
+        ep_keys: list[str] episode ordering used
+        """
+        data = np.load(data, allow_pickle=True).item()
+        ep_keys = sorted(data.keys())
+        num_eps = len(ep_keys)
+
+        init = torch.empty((num_eps, 13), device=self.device, dtype=dtype)
+
+        for i, k in enumerate(ep_keys):
+            ep = data[k]
+
+            pos  = torch.as_tensor(ep["obs.fingertip_pos"][0], device=self.device, dtype=dtype)   # (3,)
+            quat = torch.as_tensor(ep["obs.fingertip_quat"][0], device=self.device, dtype=dtype)  # (4,)
+
+            rel_fixed = torch.as_tensor(ep["obs.fingertip_pos_rel_fixed"][0], device=self.device, dtype=dtype)  # (3,)
+            rel_held  = torch.as_tensor(ep["obs.fingertip_pos_rel_held"][0],  device=self.device, dtype=dtype)  # (3,)
+            a = pos - rel_fixed  # (3,)
+            b = pos - rel_held   # (3,)
+
+            init[i] = torch.cat([pos, quat, a, b], dim=0)  # (13,)
+
+        return init.unsqueeze(0).expand(self.num_envs, -1, -1)
+
     def _init_residual_policy_buffers(self):
         """Initialize buffers specific to residual policy."""
         self.verbose = self.cfg.env_options.verbose
@@ -52,34 +84,24 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.vis_options = self.cfg.env_options.vis_options
 
-        if self.vis_options["eval_mode"]:
-            self.base_actions_agent = NearestNeighborBuffer(
-                factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
-                self.num_envs, 
-                min_horizon=self.cfg.base_rand.horizon[0], 
-                max_horizon=self.cfg.base_rand.horizon[1], 
-                device=self.device, 
-                pad=True # type: ignore
-            )
-        else:
-            self.base_actions_agent = NearestNeighborBuffer(
-                factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file), 
-                self.num_envs, 
-                min_horizon=self.cfg.base_rand.horizon[0], 
-                max_horizon=self.cfg.base_rand.horizon[1], 
-                device=self.device, 
-                pad=True # type: ignore
-            )
+        self.base_actions_agent = NearestNeighborBuffer(
+            factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file), 
+            self.num_envs, 
+            min_horizon=self.cfg.base_rand.horizon[0], 
+            max_horizon=self.cfg.base_rand.horizon[1], 
+            device=self.device, 
+            pad=True, # type: ignore
+            offline_base=self.cfg.env_options.offline_base,
+        )
         self.base_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
         self.total_episodes: int = self.base_actions_agent.get_total_episodes() 
-        if self.vis_options["eval_mode"]:
-            # assert self.num_envs == self.total_episodes, "num_envs must equal total_episodes in eval_mode"
-            self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes
-        self.episode_idx = torch.randint(0, self.total_episodes, (self.num_envs,), device=self.device)
-        
-        self.initial_poses = torch.load(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.initial_poses_hf_file)) # dict each of shape (tot_eps, dim) # type: ignore
-        self.initial_poses = {k: v.unsqueeze(0).repeat((self.num_envs, 1, 1)).to(self.device) for k, v in self.initial_poses.items()} # dict each of shape (num_envs, tot_eps, dim)
+        if self.cfg.env_options.step_eps:
+            self.episode_idx = torch.randint(0, self.total_episodes, (self.num_envs,), device=self.device)
+        else:
+            self.episode_idx = torch.arange(0, self.num_envs, device=self.device) % self.total_episodes # fixed eps idx
+
+        self.initial_poses = self.build_init_state(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file)) # (num_envs, num_eps, 13)
 
         # ctrl params
         self.Kx = torch.tensor([150.0], device=self.device).repeat(self.num_envs) # (num_envs, )
@@ -180,11 +202,12 @@ class FactoryEnvResidual(DirectRLEnv):
         self.held_center_pos_local = torch.zeros((self.num_envs, 3), device=self.device) # center2held transform
         if self.cfg_task.name == "gear_mesh":
             self.held_center_pos_local[:, 0] += self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0]
-            self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.3 + 0.01
+            self.held_center_pos_local[:, 2] += 0.0175 # offset
+            self.held_center_pos_local[:, 2] += 0.0125 - 0.005 # offset from center to top of gear
 
         elif self.cfg_task.name == "peg_insert":
             self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height 
-            self.held_center_pos_local[:, 2] -= self.cfg_task.robot_cfg.xarm_fingerpad_length / 3.0
+            self.held_center_pos_local[:, 2] -= 0.02
 
         elif self.cfg_task.name == "nut_thread":
             self.held_center_pos_local[:, 2] += 0.01
@@ -192,7 +215,7 @@ class FactoryEnvResidual(DirectRLEnv):
         # Computer body indices.
         self.left_finger_body_idx = self._robot.body_names.index("left_finger") 
         self.right_finger_body_idx = self._robot.body_names.index("right_finger")
-        self.eef_body_idx = self._robot.body_names.index("link7") # TODO: change logic to fingertip == T(eef)
+        self.eef_body_idx = self._robot.body_names.index("link7")
         self.sim_fingertip2eef = torch.tensor([self.cfg.sim_fingertip2eef], device=self.device).repeat(self.num_envs, 1)
         self.real_fingertip2eef = torch.tensor([self.cfg.real_fingertip2eef], device=self.device).repeat(self.num_envs, 1)
         self.arm_dof_idx, _ = self._robot.find_joints("joint.*")
@@ -239,7 +262,7 @@ class FactoryEnvResidual(DirectRLEnv):
         # spawn a usd file of a table into the scene
         cfg = sim_utils.UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd")
         cfg.func(
-            "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, -0.006), orientation=(0.70711, 0.0, 0.0, 0.70711)
+            "/World/envs/env_.*/Table", cfg, translation=(0.55, 0.0, -0.0015), orientation=(0.70711, 0.0, 0.0, 0.70711)
         )
 
         self._robot = Articulation(self.cfg.robot)
@@ -305,7 +328,7 @@ class FactoryEnvResidual(DirectRLEnv):
             ),
         )
 
-        self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, sim_fingertip_pos, sim_eef_quat, self.gripper) # (num_envs, residual_action_dim) at eef
+        self.base_actions = self.base_actions_agent.get_actions(self.episode_idx, sim_fingertip_pos, sim_eef_quat, self.gripper, verbose=False) # (num_envs, residual_action_dim) at eef
         
         if self.vis_options["training_data"]:
             self.obs_base, quat_base, _ = self.base_actions_agent.get_closest_obs(self.episode_idx, sim_fingertip_pos, sim_eef_quat, self.gripper, verbose=False)
@@ -396,13 +419,18 @@ class FactoryEnvResidual(DirectRLEnv):
 
     def _get_factory_obs_state_dict(self):
         """Populate dictionaries for the policy and critic."""
-        noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
-        noisy_held_pos = self.held_pos_obs_frame + self.init_held_pos_obs_noise 
+        if self.cfg.env_options.obs_dmr:
+            noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
+            noisy_held_pos = self.held_pos_obs_frame + self.init_held_pos_obs_noise 
+        else:
+            noisy_fixed_pos = self.fixed_pos_obs_frame
+            noisy_held_pos = self.held_pos_obs_frame
 
         prev_actions = self.actions.clone()
-
-        # self.red_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
-        # self.blue_sphere_marker.visualize(self.fixed_pos_obs_frame + self.scene.env_origins)
+        
+        self.red_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
+        self.blue_sphere_marker.visualize(self.fixed_pos_obs_frame + self.scene.env_origins)
+        self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
  
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
@@ -413,7 +441,9 @@ class FactoryEnvResidual(DirectRLEnv):
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
-            "base_actions": self.base_actions,
+            "base_fingertip_pos": self.base_actions[:, :3],
+            "base_fingertip_quat": self.base_actions[:, 3:7],
+            "base_gripper": self.base_actions[:, 7:8],
         }
 
         state_dict = {
@@ -435,8 +465,11 @@ class FactoryEnvResidual(DirectRLEnv):
             "rot_threshold": self.rot_threshold,
             "gripper_threshold": self.gripper_threshold,
             "prev_actions": prev_actions,
-            "base_actions": self.base_actions, 
+            "base_fingertip_pos": self.base_actions[:, :3],
+            "base_fingertip_quat": self.base_actions[:, 3:7],
+            "base_gripper": self.base_actions[:, 7:8],
         }
+
         return obs_dict, state_dict
 
     def _get_observations(self):
@@ -445,7 +478,7 @@ class FactoryEnvResidual(DirectRLEnv):
             self._compute_base_actions()
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
-        obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.residual_obs_order + ["prev_actions"])
+        obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.residual_obs_order + ["prev_actions"])
         state_tensors = factory_utils.collapse_obs_dict(state_dict, self.cfg.residual_state_order + ["prev_actions"])
 
         if obs_tensors.isnan().any() or state_tensors.isnan().any():
@@ -515,7 +548,7 @@ class FactoryEnvResidual(DirectRLEnv):
             -self.sim_fingertip2eef,
         )[1]
 
-        # gripper_action = torch.abs(self.actions[:, 6:7])
+        gripper_action = ((self.actions[:, 6:7] + 1.0) * 0.5) * 1.6  # [-1, 1] to [0, 1.6]
         ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
@@ -566,25 +599,29 @@ class FactoryEnvResidual(DirectRLEnv):
         self._visualize_markers()
         # time_out = self.episode_length_buf >= self.max_per_eps_length[self.episode_idx] - 1
 
-        time_out = self.episode_length_buf >= self.max_episode_length - 1 # TODO: efficiency problem -> per eps max length speeds up learning
+        time_out = self.episode_length_buf >= self.max_episode_length - 1 
         # print("timestep: ", self.episode_length_buf[0].item(), "/", self.max_episode_length)
-        dist_threshold = 0.2
-        terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold # to eliminate the case where held asset falls far away
-        terminated |= self.ep_succeeded.bool()
 
-        if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
-            terminated |= self.bad_insert.bool()
-            self.bad_insert[:] = 0
+        if self.cfg.env_options.step_eps:
+            dist_threshold = 0.2
+            terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold # to eliminate the case where held asset falls far away
+            terminated |= self.ep_succeeded.bool()
 
-        if self.cfg_task.name == "peg_insert":
-            unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-            tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
-            terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
+            if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
+                terminated |= self.bad_insert.bool()
+                self.bad_insert[:] = 0
 
-        elif self.cfg_task.name == "nut_thread":
-            on_ground = self.held_pos[:, 2] < 0.02
-            dropped = torch.logical_and(on_ground, self.picked_up)
-            terminated |= dropped
+            if self.cfg_task.name == "peg_insert":
+                unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+                tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
+                terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
+
+            elif self.cfg_task.name == "nut_thread":
+                on_ground = self.held_pos[:, 2] < 0.02
+                dropped = torch.logical_and(on_ground, self.picked_up)
+                terminated |= dropped
+        else:
+            terminated = time_out.clone()
 
         done = torch.logical_or(time_out, terminated)
         s = self.ep_succeeded[done].float()  # shape [n_finished]
@@ -786,9 +823,14 @@ class FactoryEnvResidual(DirectRLEnv):
             failed_positions[~failed_envs] = torch.tensor([0.0, 0.0, -10.0], device=self.device)  # Move successful envs off-screen
             self.red_sphere_marker.visualize(failed_positions)
 
+        gripper_action = ((self.actions[:, 6:7] + 1.0) * 0.5)
+        gripper_target = self.base_actions[:, 7:8]
+        gripper_error = 1e-2 * torch.abs(gripper_action - gripper_target).squeeze(-1)
+
         rew_dict = {
             "action_delta": -action_delta,
-            "grasp_success": grasp_successes.float(),
+            "gripper_error": -gripper_error,
+            # "grasp_success": grasp_successes.float(),
             "task_engaged": task_engaged.float(),
             "task_success": task_successes.float(),
         }
@@ -848,7 +890,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.enable_cameras:
             self.front_camera.reset(env_ids=env_ids)
 
-        if not self.vis_options["eval_mode"]:
+        if self.cfg.env_options.ctrl_dmr:
             self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
             self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
             self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
@@ -856,7 +898,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
 
         # move to next episode
-        self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
+        if self.cfg.env_options.step_eps:
+            self.episode_idx[env_ids] = (self.episode_idx[env_ids] + 1) % self.total_episodes 
 
         # object position noises
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), dtype=torch.float32, device=self.device)
@@ -869,20 +912,27 @@ class FactoryEnvResidual(DirectRLEnv):
         held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_rand)
         self.init_held_pos_obs_noise[env_ids] = held_asset_pos_noise
 
-        if self.vis_options["eval_mode"]:
-            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.0
-            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
-        else:
+        if self.cfg.env_options.data_aug:
             translation_noise = torch.randn((len(env_ids), 2), device=self.device) * self.cfg.obs_rand.pos_aug
             yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(self.cfg.obs_rand.rot_aug)
+        else:
+            translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.0
+            yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
 
         self.xy_translation_noise[env_ids] = translation_noise
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
 
-        held_pos = self.initial_poses["held_pos"][env_ids, self.episode_idx[env_ids]] # (num_resets, 3)
-        held_pos[:, :2] += translation_noise
+        held_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], -3:] # (num_resets, 3)
+        held_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device).repeat(len(env_ids), 1)
 
-        held_quat = self.initial_poses["held_quat"][env_ids, self.episode_idx[env_ids]]
+        held_pos = torch_utils.tf_combine(
+            held_quat,
+            held_pos,
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1),
+            -self.held_center_pos_local[env_ids],
+        )[1]
+        
+        held_pos[:, :2] += translation_noise
         held_quat = torch_utils.quat_mul(
             held_quat,
             torch_utils.quat_from_euler_xyz(
@@ -892,10 +942,24 @@ class FactoryEnvResidual(DirectRLEnv):
             )
         )
 
-        fixed_pos = self.initial_poses["fixed_pos"][env_ids, self.episode_idx[env_ids]]
-        fixed_pos[:, :2] += translation_noise
+        # Compute fixed_pos_obs_frame
+        fixed_tip_pos_local = torch.zeros((len(env_ids), 3), device=self.device)
+        fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
+        fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
+        if self.cfg_task.name == "gear_mesh":
+            fixed_tip_pos_local[:, 0] = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0] # type: ignore
 
-        fixed_quat = self.initial_poses["fixed_quat"][env_ids, self.episode_idx[env_ids]]
+        fixed_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], -6:-3]
+        fixed_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device).repeat(len(env_ids), 1)
+
+        fixed_pos = torch_utils.tf_combine(
+            fixed_quat,
+            fixed_pos,
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1),
+            -fixed_tip_pos_local,
+        )[1]
+
+        fixed_pos[:, :2] += translation_noise
         fixed_quat = torch_utils.quat_mul(
             fixed_quat,
             torch_utils.quat_from_euler_xyz(
@@ -915,15 +979,9 @@ class FactoryEnvResidual(DirectRLEnv):
         )
         
         # reset robot
-        init_qpos = self.initial_poses["sim_init_qpos"][env_ids, self.episode_idx[env_ids]]
-        init_fingertip = self.initial_poses["real_fingertip_pos"][env_ids, self.episode_idx[env_ids]] # (num_resets, 7)
+        init_qpos = self._robot.data.default_joint_pos[env_ids, :7]
+        init_fingertip = self.initial_poses[env_ids, self.episode_idx[env_ids], :7] # (num_resets, 7)
         sim_eef = init_fingertip.clone() # (num_resets, 7)
-        sim_eef[:, 0:3] = torch_utils.tf_combine(
-            sim_eef[:, 3:7],
-            sim_eef[:, 0:3],
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(len(env_ids), 1),
-            -self.sim_fingertip2eef[env_ids],
-        )[1]
         sim_eef[:, :2] += translation_noise
         sim_eef[:, 3:7] = torch_utils.quat_mul(
             sim_eef[:, 3:7],
@@ -933,19 +991,19 @@ class FactoryEnvResidual(DirectRLEnv):
                 yaw=yaw_rotation_noise,
             ),
         )
+        sim_eef[:, 0:3] = torch_utils.tf_combine(
+            sim_eef[:, 3:7],
+            sim_eef[:, 0:3],
+            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(len(env_ids), 1),
+            -self.sim_fingertip2eef[env_ids],
+        )[1]
+
         noised_qpos = self.compute_ik_abs(sim_eef[:, :7], init_qpos)
         self._set_replay_default_pose(joints=noised_qpos, env_ids=env_ids) # compute intermediate values there
 
         self.base_actions_agent.clear(env_ids)
-        if not self.teleop_mode:
-            self._compute_base_actions()
-        
-        # Compute fixed_pos_obs_frame
-        fixed_tip_pos_local = torch.zeros((len(env_ids), 3), device=self.device)
-        fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.height
-        fixed_tip_pos_local[:, 2] += self.cfg_task.fixed_asset_cfg.base_height
-        if self.cfg_task.name == "gear_mesh":
-            fixed_tip_pos_local[:, 0] = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0] # type: ignore
+        # if not self.teleop_mode:
+        #     self._compute_base_actions()
 
         _, fixed_tip_pos = torch_utils.tf_combine(
             self.fixed_quat[env_ids],
@@ -1011,17 +1069,17 @@ class FactoryEnvResidual(DirectRLEnv):
                 print("Visualize data error: ", e)
                 pass
 
-        if self.teleop_mode:
-            base_fingertip_pos = self.load_all_episode_act_pos(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file))
-            base_fingertip_pos = base_fingertip_pos.reshape(-1, 3)
+        # if self.teleop_mode:
+        #     base_fingertip_pos = self.load_all_episode_act_pos(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.action_data_hf_file))
+        #     base_fingertip_pos = base_fingertip_pos.reshape(-1, 3)
 
-            from isaacsim.util.debug_draw import _debug_draw
-            draw = _debug_draw.acquire_debug_draw_interface()
-            draw.clear_lines()
-            base_fingertip_pos = (base_fingertip_pos + self.scene.env_origins).cpu().numpy().tolist()
-            purple_color = [(1, 0, 1, 1)]* len(base_fingertip_pos)
+        #     from isaacsim.util.debug_draw import _debug_draw
+        #     draw = _debug_draw.acquire_debug_draw_interface()
+        #     draw.clear_lines()
+        #     base_fingertip_pos = (base_fingertip_pos + self.scene.env_origins).cpu().numpy().tolist()
+        #     purple_color = [(1, 0, 1, 1)]* len(base_fingertip_pos)
 
-            draw.draw_points(base_fingertip_pos, purple_color, [5]*len(base_fingertip_pos))
+        #     draw.draw_points(base_fingertip_pos, purple_color, [5]*len(base_fingertip_pos))
 
     def load_all_episode_act_pos(self, path, pad=True):
         """

@@ -31,7 +31,9 @@ OBS_DIM_CFG = {
     "gripper": 1,
     "ee_linvel": 3,
     "ee_angvel": 3,
-    "base_actions": 8,
+    "base_fingertip_pos": 3,
+    "base_fingertip_quat": 4,
+    "base_gripper": 1,
 }
 
 STATE_DIM_CFG = {
@@ -53,14 +55,16 @@ STATE_DIM_CFG = {
     "pos_threshold": 3,
     "rot_threshold": 3,
     "gripper_threshold": 1,
-    "base_actions": 8,
+    "base_fingertip_pos": 3,
+    "base_fingertip_quat": 4,
+    "base_gripper": 1,
 }
 
 # TODO: move to hf
-intr_path = resolve_hf_file("shashuo0104/rrl_data", "cameras/intrinsics.json")
+intr_path = resolve_hf_file("shashuo0104/rrl_data_v2", "cameras/intrinsics.json")
 with open(intr_path, "r") as f:
     intr = json.load(f)
-extr_path = resolve_hf_file("shashuo0104/rrl_data", "cameras/extrinsics.json")
+extr_path = resolve_hf_file("shashuo0104/rrl_data_v2", "cameras/extrinsics.json")
 with open(extr_path, "r") as f:
     extr = json.load(f)
 
@@ -76,13 +80,14 @@ FRONT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
     intrinsic_matrix=FRONT_INTR,
     height=H,
     width=W,
-    focal_length=1.93
+    # focal_length=1.93
 )
 
-FRONT_PINHOLE_CFG.horizontal_aperture_offset = -0.04
+# FRONT_PINHOLE_CFG.horizontal_aperture_offset = -0.04
 
 front2base = np.array(extr["cam2base"]["front2base"]).reshape(4, 4)
-front2base[1, 3] += 0.0055  # adjust for sim vs real diff
+# front2base[1, 3] += 0.0055  # adjust for sim vs real diff
+front2base[0, 3] -= 0.0065  # adjust for sim vs real diff
 
 R_front2base = front2base[:3, :3]
 q_front2base = quat_from_matrix(torch.from_numpy(R_front2base)).tolist() # wxyz
@@ -102,8 +107,14 @@ class BaseActionRandCfg:
 
 @configclass
 class EnvOptionsCfg:
-    measure_force = False
+    measure_force = True
     enable_cameras = False
+
+    ctrl_dmr = True
+    obs_dmr = True
+    data_aug = True
+    step_eps = True
+    offline_base = False
     
     verbose = False
 
@@ -113,7 +124,6 @@ class EnvOptionsCfg:
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red wireframes
-        "eval_mode": False,
     }
     teleop_mode = False
 
@@ -161,7 +171,7 @@ class CtrlCfg:
 class FactoryEnvCfg(DirectRLEnvCfg):
     decimation = 8
     action_space = 6 # TODO: 7 for residual
-    residual_action_space = 6
+    residual_action_space = 7
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
@@ -191,7 +201,6 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "fingertip_pos_rel_held", 
         "ee_linvel", 
         "ee_angvel", 
-        "base_actions"
     ]
 
     residual_state_order: list = [
@@ -206,7 +215,9 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "held_quat",
         "fixed_pos",
         "fixed_quat",
-        "base_actions"
+        "base_fingertip_pos",
+        "base_fingertip_quat",
+        "base_gripper"
     ]
 
     residual_obs_order_no_base: list = [
@@ -330,7 +341,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
     
-    sim_fingertip2eef = [0.0, 0.0, 0.16]
+    sim_fingertip2eef = [0.0, 0.0, 0.165]
     real_fingertip2eef = [0.0, 0.0, 0.23]
 
     eef_contact_sensor_cfg = ContactSensorCfg(
