@@ -175,3 +175,50 @@ def resolve_hf_file(repo_id: str, filename: str, repo_type = "dataset", revision
         revision=revision,
     )
     return str(Path(p))
+
+from pathlib import Path
+from huggingface_hub import hf_hub_download, list_repo_files, snapshot_download
+
+def resolve_hf_path(
+    repo_id: str,
+    path: str,
+    repo_type: str = "dataset",
+    revision: str | None = None,
+    cache_dir: str | None = None,
+) -> str:
+    """
+    If `path` is a file in the repo -> download that file and return its local path.
+    If `path` is a directory prefix -> snapshot_download only files under that prefix
+    and return the local directory path corresponding to that prefix.
+    """
+    path = path.strip("/")
+    files = list_repo_files(repo_id=repo_id, repo_type=repo_type, revision=revision)
+
+    # File case
+    if path in files:
+        p = hf_hub_download(
+            repo_id=repo_id,
+            filename=path,
+            repo_type=repo_type,
+            revision=revision,
+            cache_dir=cache_dir,
+        )
+        return str(Path(p))
+
+    # Directory (prefix) case
+    prefix = path + "/"
+    matched = [f for f in files if f.startswith(prefix)]
+    if not matched:
+        raise FileNotFoundError(f"'{path}' not found as file or directory in {repo_id} ({repo_type})")
+
+    # Download only what's under the prefix
+    repo_local = snapshot_download(
+        repo_id=repo_id,
+        repo_type=repo_type,
+        revision=revision,
+        cache_dir=cache_dir,
+        allow_patterns=[prefix + "*"],
+    )
+
+    # Return the local directory corresponding to that prefix
+    return str(Path(repo_local) / prefix)

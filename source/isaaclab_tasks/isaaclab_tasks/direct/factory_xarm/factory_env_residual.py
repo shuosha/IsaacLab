@@ -132,7 +132,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         if self.cfg.env_options.base_model == "bc":
             from lerobot.rrl.dp_wrapper import DPWrapper
-            self.base_bc_model = DPWrapper(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.diffusion_path))
+            self.base_bc_model = DPWrapper(factory_utils.resolve_hf_path(self.cfg_task.hf_repo, self.cfg_task.diffusion_path))
 
     def compute_ik_abs(
         self,

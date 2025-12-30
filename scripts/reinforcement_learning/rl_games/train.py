@@ -42,6 +42,7 @@ parser.add_argument(
     help="if toggled, this experiment will be tracked with Weights and Biases",
 )
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
+parser.add_argument("--base", choices=["nn", "bc"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -95,6 +96,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # override configurations with non-hydra CLI arguments
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.env_options.base_model = args_cli.base if args_cli.base is not None else env_cfg.env_options.base_model
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
