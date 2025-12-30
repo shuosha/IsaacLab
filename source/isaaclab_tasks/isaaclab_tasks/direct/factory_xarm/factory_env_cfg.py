@@ -111,6 +111,8 @@ class EnvOptionsCfg:
     measure_force = True
     enable_cameras = False
 
+    base_model = "nn" # nn / bc
+
     ctrl_dmr = True
     obs_dmr = True
     data_aug = True

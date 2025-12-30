@@ -130,6 +130,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.quat_pred = torch.zeros((self.num_envs, 4), device=self.device)
 
+        if self.cfg.env_options.base_model == "bc":
+            from lerobot.rrl.dp_wrapper import DPWrapper
+            self.base_bc_model = DPWrapper(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.diffusion_path))
+
     def compute_ik_abs(
         self,
         action: torch.Tensor,
@@ -317,7 +321,7 @@ class FactoryEnvResidual(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-    def _compute_base_actions(self):
+    def _compute_nn_base_actions(self):
         sim_fingertip_pos = self.fingertip_midpoint_pos.clone()
         sim_fingertip_pos[:, :2] -= self.xy_translation_noise
         sim_eef_quat = self.fingertip_midpoint_quat.clone()
@@ -345,6 +349,23 @@ class FactoryEnvResidual(DirectRLEnv):
                 yaw=self.yaw_rotation_noise.squeeze(-1),
             )
         )
+
+    def _compute_bc_base_actions(self):
+        bc_obs = {
+            "observation.state": torch.cat([
+                self.fingertip_midpoint_pos,
+                self.fingertip_midpoint_quat,
+                self.gripper,
+                self.ee_linvel_fd,
+                self.ee_angvel_fd,
+            ], dim=-1),
+            "observation.environment_state": torch.cat([
+                self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
+                self.fingertip_midpoint_pos - self.held_pos_obs_frame,
+            ], dim=-1),
+        }
+
+        self.base_actions = self.base_bc_model.act(bc_obs)  # (num_envs, 8)
 
     def _compute_intermediate_values(self, dt):
         """Get values computed from raw tensors. This includes adding noise."""
@@ -476,8 +497,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
-        if not self.teleop_mode:
-            self._compute_base_actions()
+        if not self.teleop_mode and self.cfg.env_options.base_model == "nn":
+            self._compute_nn_base_actions()
+        elif not self.teleop_mode and self.cfg.env_options.base_model == "bc":
+            self._compute_bc_base_actions()
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.residual_obs_order + ["prev_actions"])
@@ -1016,8 +1039,11 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.quat_pred[env_ids] = self.fingertip_midpoint_quat[env_ids].clone()
         self.base_actions_agent.clear(env_ids)
+
+        if self.cfg.env_options.base_model == "bc":
+            self.base_bc_model.reset()
         # if not self.teleop_mode:
-        #     self._compute_base_actions()
+        #     self._compute_nn_base_actions()
 
         _, fixed_tip_pos = torch_utils.tf_combine(
             self.fixed_quat[env_ids],
