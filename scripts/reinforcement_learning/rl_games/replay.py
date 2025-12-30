@@ -26,6 +26,7 @@ parser.add_argument(
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--out", type=str, required=True, help="Output directory to save the simulated data.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -86,6 +87,9 @@ from isaaclab.utils.math import (
     subtract_frame_transforms,
 )
 
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+
 # PLACEHOLDER: Extension template (do not remove this comment)
 def load_npz_dict(path):
     data = np.load(path, allow_pickle=True)
@@ -94,6 +98,14 @@ def load_npz_dict(path):
         else {k: data[k].item() for k in data.files}
     )
 
+def resolve_hf_file(repo_id: str, filename: str, repo_type = "dataset", revision: str | None = None) -> str:
+    p = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type=repo_type,
+        revision=revision,
+    )
+    return str(Path(p))
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -103,9 +115,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     train_task_name = task_name.replace("-Play", "")
 
     # load traj & object data
-    input_path = "rrl_data/new_gearmesh_train_data"
-    output_path = os.path.join(input_path, "sim_replay")
-    teleop_data = np.load(env_cfg.task.real_teleop_data_path, allow_pickle=True).item()
+    output_path = os.path.join(args_cli.out, "sim_replay")
+    teleop_data = np.load(resolve_hf_file(env_cfg.task.hf_repo, env_cfg.task.train_data_hf_file), allow_pickle=True).item()
 
     num_envs = len(teleop_data)
     eps_idx = list(range(num_envs))
@@ -120,7 +131,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.env_options.offline_base = True
     env_cfg.env_options.measure_force = True
     env_cfg.env_options.enable_cameras = True
-    env_cfg.env_options.verbose = False
+    env_cfg.env_options.verbose = True
 
     lengths = [len(teleop_data[f"episode_{e:04d}"]["obs.gripper"]) for e in eps_idx]
     horizon = env_cfg.episode_length_s * 15
@@ -216,6 +227,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
+
+            base_actions = env.unwrapped.base_actions
             for i in range(len(eps_idx)):
                 if timestep >= lengths[i]:
                     continue
@@ -237,8 +250,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 obs_ee_angvel_fd[i].append(obs[i, 17:20].cpu().numpy())
 
                 act_fingertip_pos[i].append(obs[i, 20:23].cpu().numpy())
-                act_fingertip_quat[i].append(obs[i, 23:27].cpu().numpy())
-                act_gripper[i].append(obs[i, 27:28].cpu().numpy())
+                if env_cfg.task.name == "nut_thread":
+                    act_fingertip_quat[i].append(base_actions[i, 3:7].cpu().numpy())
+                else:
+                    act_fingertip_quat[i].append(obs[i, 23:27].cpu().numpy())
+                act_gripper[i].append(base_actions[i, 7:8].cpu().numpy())
 
             if len(eps_idx) == 1:
                 print("------------ Step Info (single env) -----------")
@@ -291,9 +307,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "action.gripper":  np.stack(act_gripper[i], axis=0),      # (Li, 1)
         }
 
-    os.makedirs(os.path.join(input_path, "data"), exist_ok=True)
-    np.save(os.path.join(input_path, "data", "sim_replay_data.npy"), out_data)
-    print(f"[INFO] Saved simulated trajectories to: {os.path.join(input_path, 'data', 'sim_replay_data.npy')}")
+    os.makedirs(os.path.join(args_cli.out, "data"), exist_ok=True)
+    np.save(os.path.join(args_cli.out, "data", "sim_replay_data.npy"), out_data)
+    print(f"[INFO] Saved simulated trajectories to: {os.path.join(args_cli.out, 'data', 'sim_replay_data.npy')}")
 
 
 if __name__ == "__main__":
