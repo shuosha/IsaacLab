@@ -29,6 +29,10 @@ class NearestNeighborBuffer:
         self._min_horizon = int(min_horizon)
         self._max_horizon = int(max_horizon)
 
+        # --- kNN stochasticity knobs ---
+        self._knn_k = 10
+        self._knn_tau = 0.3  # larger => more stochastic (flatter probs); start ~0.2-0.5
+
         data = np.load(path, allow_pickle=True).item()
         eps = sorted(data.keys())
 
@@ -55,10 +59,18 @@ class NearestNeighborBuffer:
                 out[i, :len(x)] = x
             return out
 
+        # robot states
         self._obs_pos  = pad_last("obs.fingertip_pos", 3)
         self._obs_quat = pad_last("obs.fingertip_quat", 4)
         self._obs_grip = pad_last("obs.gripper", 1)
-        self._obs_held_pos = self._obs_pos - pad_last("obs.fingertip_pos_rel_held", 3)
+        self._obs_linvel = pad_last("obs.ee_linvel_fd", 3)
+        self._obs_angvel = pad_last("obs.ee_angvel_fd", 3)
+
+        # env states
+        self._obs_rel_held = pad_last("obs.fingertip_pos_rel_held", 3)
+        self._obs_rel_fixed = pad_last("obs.fingertip_pos_rel_fixed", 3)
+
+        # actions
         self._act_pos  = pad_last("action.fingertip_pos", 3)
         self._act_quat = pad_last("action.fingertip_quat", 4)
         self._act_grip = pad_last("action.gripper", 1)
@@ -84,7 +96,7 @@ class NearestNeighborBuffer:
               f"Horizon in [{self._min_horizon}, {self._max_horizon}].")
 
         self._replay_mode = bool(offline_base)
-        self._replay_ptr = torch.zeros(num_envs, dtype=torch.long, device=self._device) 
+        self._replay_ptr = torch.zeros(num_envs, dtype=torch.long, device=self._device)
 
 
     # --- public helpers ---
@@ -94,7 +106,7 @@ class NearestNeighborBuffer:
 
     def get_max_episode_length(self):
         return self._max_episode_length
-    
+
     def get_max_per_episode_length(self):
         return self._lengths
 
@@ -111,38 +123,54 @@ class NearestNeighborBuffer:
 
     # --- core NN ---
 
-    def _nn_indices(self, eidx, pos, quat=None, grip=None, held_pos=None, verbose=False):
+    def _nn_indices(self, eidx, pos, quat=None, grip=None, verbose=False):
         # All tensors already on self._device
         obs_p = self._obs_pos[eidx]
         obs_q = self._obs_quat[eidx]
         obs_g = self._obs_grip[eidx]
-        obs_held_p = self._obs_held_pos[eidx]
         mask  = self._mask[eidx]
 
         pos_term  = 5 * torch.norm(obs_p - pos[:, None, :], dim=-1)
         ang_term  = torch.zeros_like(pos_term)
         grip_term = torch.zeros_like(pos_term)
-        held_term = torch.zeros_like(pos_term)
 
         if quat is not None:
             ang_term = torch.rad2deg(
                 quat_geodesic_angle(obs_q, quat[:, None, :])
             ) / 50
         if grip is not None:
-            grip_term = 0.01 * (obs_g.squeeze(-1) - grip.view(-1, 1)).abs()
-        if held_pos is not None:
-            held_term  = 1000 * torch.norm(obs_held_p - held_pos[:, None, :], dim=-1)
+            grip_term = 5 * (obs_g.squeeze(-1) - grip.view(-1, 1)).abs()
 
-        dist = (pos_term + ang_term + grip_term + held_term).masked_fill(~mask, float("inf"))
-        t0   = dist.argmin(dim=1)
-        L    = mask.long().sum(dim=1)
+        dist = (pos_term + ang_term + grip_term).masked_fill(~mask, float("inf"))
+
+        # valid lengths (per episode in batch)
+        L = mask.long().sum(dim=1)  # (N,)
+
+        # ---- stochastic kNN: sample among k nearest with p(i) ∝ exp(-d_i / tau) ----
+        # If tau is tiny / non-positive, fall back to argmin (deterministic 1-NN).
+        if self._knn_tau <= 0.0:
+            t0 = dist.argmin(dim=1)
+        else:
+            k = min(self._knn_k, dist.shape[1])
+
+            # get k smallest distances
+            d_k, idx_k = torch.topk(dist, k=k, largest=False, dim=1)  # (N,k), (N,k)
+
+            # Convert to logits; subtract max for stability
+            logits = -d_k / self._knn_tau
+            logits = logits - logits.max(dim=1, keepdim=True).values
+
+            probs = torch.softmax(logits, dim=1)  # (N,k)
+
+            # Sample one neighbor index per env
+            j = torch.multinomial(probs, num_samples=1).squeeze(1)      # (N,)
+            t0 = idx_k.gather(1, j[:, None]).squeeze(1)                 # (N,)
 
         if verbose:
             mmean = lambda x: x.masked_fill(~mask, torch.nan).nanmean().item()
             print(f"[NN contrib] pos_cm*10: {mmean(pos_term):.3f}, "
                   f"ang_deg/10: {mmean(ang_term):.3f}, "
-                  f"grip_L1*2: {mmean(grip_term):.3f}, "
-                  f"held_cm*10: {mmean(held_term):.3f}")
+                  f"grip_L1*2: {mmean(grip_term):.3f}")
         return t0, L
 
     @torch.no_grad()
@@ -151,12 +179,11 @@ class NearestNeighborBuffer:
                     pos: torch.Tensor,
                     quat: torch.Tensor | None = None,
                     grip: torch.Tensor | None = None,
-                    held_pos: torch.Tensor | None = None,
                     verbose: bool = False) -> torch.Tensor:
         # ... (device checks etc. unchanged)
 
         N = pos.shape[0]
-        
+
         # -----------------------------
         # Replay mode: open-loop actions from t=0
         # -----------------------------
@@ -194,7 +221,6 @@ class NearestNeighborBuffer:
                 pos[ids],
                 None if quat is None else quat[ids],
                 None if grip is None else grip[ids],
-                None if held_pos is None else held_pos[ids],
                 verbose,
             )
 
@@ -243,29 +269,17 @@ class NearestNeighborBuffer:
     def get_episode_traj(self, eps_idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Return the full (obs_pos, obs_quat, act_pos, act_quat) trajectory for a given episode index.
-
-        Args:
-            eps_idx: Integer index of the episode (0-based, in [0, self._total_episodes)).
-
-        Returns:
-            obs_pos: (T, 3) tensor of observed end-effector positions.
-            obs_quat: (T, 4) tensor of observed end-effector quaternions.
-            act_pos: (T, 3) tensor of action end-effector positions.
-            act_quat: (T, 4) tensor of action end-effector quaternions.
         """
-        # Bounds check
         if not (0 <= eps_idx < self._total_episodes):
             raise IndexError(
                 f"Episode index {eps_idx} out of range [0, {self._total_episodes - 1}]"
             )
 
-        # True length of this episode
         T = int(self._lengths[eps_idx].item())
 
-        # Slice and optionally clone if you want to detach from internal storage
-        obs_pos = self._obs_pos[eps_idx, :T, :].clone()  # (T, 3)
+        obs_pos = self._obs_pos[eps_idx, :T, :].clone()    # (T, 3)
         obs_quat = self._obs_quat[eps_idx, :T, :].clone()  # (T, 4)
-        act_pos = self._act_pos[eps_idx, :T, :].clone()  # (T, 3)
+        act_pos = self._act_pos[eps_idx, :T, :].clone()    # (T, 3)
         act_quat = self._act_quat[eps_idx, :T, :].clone()  # (T, 4)
 
         return obs_pos, obs_quat, act_pos, act_quat
@@ -277,31 +291,12 @@ class NearestNeighborBuffer:
         pos: torch.Tensor,
         quat: torch.Tensor | None = None,
         grip: torch.Tensor | None = None,
-        held_pos: torch.Tensor | None = None,
         verbose: bool = False,
         return_idx: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
-        For each env, return the obs_pos that is closest to the given (pos, quat, grip)
-        according to the same distance used for NN actions.
-
-        Args:
-            eidx: (N,) long tensor of episode indices.
-            pos:  (N, 3) tensor of query end-effector positions.
-            quat: (N, 4) tensor of query quaternions (optional).
-            grip: (N,) or (N, 1) tensor of gripper values (optional).
-            verbose: if True, print NN contrib info.
-            return_idx: if True, also return the time indices (t0) used.
-
-        Returns:
-            If return_idx is False:
-                obs_pos_nn: (N, 3) tensor of nearest observed positions.
-            If return_idx is True:
-                (obs_pos_nn, t0):
-                    obs_pos_nn: (N, 3)
-                    t0:         (N,) long tensor of time indices.
+        For each env, return the obs_pos that is closest to the given (pos, quat, grip).
         """
-        # device checks (same as in get_actions)
         if pos.device != self._device:
             raise ValueError(f"pos.device={pos.device} but buffer.device={self._device}")
         if quat is not None and quat.device != self._device:
@@ -309,18 +304,14 @@ class NearestNeighborBuffer:
         if grip is not None and grip.device != self._device:
             raise ValueError("grip must be on the same device as the buffer")
 
-        # core NN: reuse your existing distance logic
         t0, _ = self._nn_indices(
             eidx=eidx,
             pos=pos,
             quat=quat,
             grip=grip,
-            held_pos=held_pos,
             verbose=verbose,
-        )  # t0: (N,)
+        )
 
-        # gather the corresponding obs_pos
-        # self._obs_pos: (E, T, 3)
         obs_pos_nn = self._obs_pos[eidx, t0, :]  # (N, 3)
 
         if return_idx:
@@ -334,36 +325,12 @@ class NearestNeighborBuffer:
         pos: torch.Tensor,
         quat: torch.Tensor | None = None,
         grip: torch.Tensor | None = None,
-        held_pos: torch.Tensor | None = None,
         verbose: bool = False,
         return_idx: bool = False,
-    ) -> (
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-        | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
     ):
         """
-        For each env, return the obs (pos, quat, grip) that is closest to the given
-        (pos, quat, grip) according to the same distance used for NN actions.
-
-        Args:
-            eidx: (N,) long tensor of episode indices.
-            pos:  (N, 3) tensor of query end-effector positions.
-            quat: (N, 4) tensor of query quaternions (optional).
-            grip: (N,) or (N, 1) tensor of gripper values (optional).
-            verbose: if True, print NN contrib info.
-            return_idx: if True, also return the time indices (t0) used.
-
-        Returns:
-            If return_idx is False:
-                (pos_nn, quat_nn, grip_nn):
-                    pos_nn:   (N, 3)
-                    quat_nn:  (N, 4)
-                    grip_nn:  (N, 1)
-            If return_idx is True:
-                (pos_nn, quat_nn, grip_nn, t0):
-                    t0:       (N,) long tensor of time indices.
+        For each env, return the obs (pos, quat, grip) closest to the query.
         """
-        # device checks (same as in get_actions)
         if pos.device != self._device:
             raise ValueError(f"pos.device={pos.device} but buffer.device={self._device}")
         if quat is not None and quat.device != self._device:
@@ -371,23 +338,17 @@ class NearestNeighborBuffer:
         if grip is not None and grip.device != self._device:
             raise ValueError("grip must be on the same device as the buffer")
 
-        # core NN: reuse your existing distance logic
         t0, _ = self._nn_indices(
             eidx=eidx,
             pos=pos,
             quat=quat,
             grip=grip,
-            held_pos=held_pos,
             verbose=verbose,
-        )  # t0: (N,)
+        )
 
-        # gather the corresponding obs
-        # self._obs_pos:  (E, T, 3)
-        # self._obs_quat: (E, T, 4)
-        # self._obs_grip: (E, T, 1)
-        pos_nn   = self._obs_pos[eidx, t0, :]      # (N, 3)
-        quat_nn  = self._obs_quat[eidx, t0, :]     # (N, 4)
-        grip_nn  = self._obs_grip[eidx, t0, :]     # (N, 1)
+        pos_nn   = self._obs_pos[eidx, t0, :]
+        quat_nn  = self._obs_quat[eidx, t0, :]
+        grip_nn  = self._obs_grip[eidx, t0, :]
 
         if return_idx:
             return pos_nn, quat_nn, grip_nn, t0

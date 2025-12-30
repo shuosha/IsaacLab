@@ -128,6 +128,8 @@ class FactoryEnvResidual(DirectRLEnv):
         self.residual_last5 = LastKPoints(self.num_envs, K=5, device=self.device)
         self.bad_insert = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
+        self.quat_pred = torch.zeros((self.num_envs, 4), device=self.device)
+
     def compute_ik_abs(
         self,
         action: torch.Tensor,
@@ -209,8 +211,8 @@ class FactoryEnvResidual(DirectRLEnv):
             self.held_center_pos_local[:, 2] += self.cfg_task.held_asset_cfg.height 
             self.held_center_pos_local[:, 2] -= 0.02
 
-        elif self.cfg_task.name == "nut_thread":
-            self.held_center_pos_local[:, 2] += 0.01
+        # elif self.cfg_task.name == "nut_thread":
+        #     self.held_center_pos_local[:, 2] += 0.01
 
         # Computer body indices.
         self.left_finger_body_idx = self._robot.body_names.index("left_finger") 
@@ -428,9 +430,9 @@ class FactoryEnvResidual(DirectRLEnv):
 
         prev_actions = self.actions.clone()
         
-        self.red_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
-        self.blue_sphere_marker.visualize(self.fixed_pos_obs_frame + self.scene.env_origins)
-        self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
+        # self.red_sphere_marker.visualize(self.held_pos_obs_frame + self.scene.env_origins)
+        # self.blue_sphere_marker.visualize(self.fixed_pos_obs_frame + self.scene.env_origins)
+        # self.green_sphere_marker.visualize(self.fingertip_midpoint_pos + self.scene.env_origins)
  
         obs_dict = {
             "fingertip_pos": self.fingertip_midpoint_pos,
@@ -531,7 +533,12 @@ class FactoryEnvResidual(DirectRLEnv):
             rot_actions_quat,
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
         )
-        ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.base_actions[:, 3:7])
+
+        if self.cfg_task.name == "nut_thread":
+            ctrl_target_fingertip_midpoint_quat = self.base_actions[:, 3:7]
+            self.quat_pred = torch_utils.quat_mul(rot_actions_quat, self.fingertip_midpoint_quat)
+        else:
+            ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.base_actions[:, 3:7])
 
         target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(ctrl_target_fingertip_midpoint_quat), dim=1)
         target_euler_xyz[:, 0] = 3.14159  # Restrict actions to be upright.
@@ -788,9 +795,9 @@ class FactoryEnvResidual(DirectRLEnv):
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
             self.prev_held_yaw = curr_held_yaw.clone()
             
-            # Compute rotation reward: 1 if rotation >= 180°
+            # Compute rotation reward: 1 if rotation >= 360°
             task_successes = torch.where(
-                self.cumulative_rotation >= 180.0,
+                self.cumulative_rotation >= 350.0,
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
@@ -814,18 +821,18 @@ class FactoryEnvResidual(DirectRLEnv):
         self.eps_task_succeeded[task_successes] = 1
         task_successes = torch.logical_and(task_successes, first_task_succeeded)
 
-        # Visualize failed envs with red sphere markers
-        failed_envs = ~task_successes
-        if failed_envs.any() and self.vis_options["failed_envs"] == True:
-            failed_positions = torch.tensor([0.5, 0.5, 0.5], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-            failed_positions = failed_positions + self.scene.env_origins
-            # Only visualize positions for failed envs
-            failed_positions[~failed_envs] = torch.tensor([0.0, 0.0, -10.0], device=self.device)  # Move successful envs off-screen
-            self.red_sphere_marker.visualize(failed_positions)
+        # # Visualize failed envs with red sphere markers
+        # failed_envs = ~task_successes
+        # if failed_envs.any() and self.vis_options["failed_envs"] == True:
+        #     failed_positions = torch.tensor([0.5, 0.5, 0.5], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+        #     failed_positions = failed_positions + self.scene.env_origins
+        #     # Only visualize positions for failed envs
+        #     failed_positions[~failed_envs] = torch.tensor([0.0, 0.0, -10.0], device=self.device)  # Move successful envs off-screen
+        #     self.red_sphere_marker.visualize(failed_positions)
 
-        gripper_action = ((self.actions[:, 6:7] + 1.0) * 0.5)
+        gripper_pred = ((self.actions[:, 6:7] + 1.0) * 0.5)
         gripper_target = self.base_actions[:, 7:8]
-        gripper_error = 1e-2 * torch.abs(gripper_action - gripper_target).squeeze(-1)
+        gripper_error = 1e-2 * torch.abs(gripper_pred - gripper_target).squeeze(-1)
 
         rew_dict = {
             "action_delta": -action_delta,
@@ -834,6 +841,9 @@ class FactoryEnvResidual(DirectRLEnv):
             "task_engaged": task_engaged.float(),
             "task_success": task_successes.float(),
         }
+        if self.cfg_task.name == "nut_thread":
+            rot_error = 1e-2 * factory_utils.quat_geodesic_angle(self.quat_pred, self.base_actions[:, 3:7])
+            rew_dict["rot_error"] = -rot_error
         # print("Rewards: ", {k: v.mean().item() for k, v in rew_dict.items()})
         rew_buf = torch.zeros_like(rew_dict["task_success"])
         for rew_name, rew in rew_dict.items():
@@ -915,9 +925,11 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg.env_options.data_aug:
             translation_noise = torch.randn((len(env_ids), 2), device=self.device) * self.cfg.obs_rand.pos_aug
             yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * math.radians(self.cfg.obs_rand.rot_aug)
+            fixed_height_noise = torch.randn((len(env_ids), ), device=self.device) * self.cfg.obs_rand.height_aug
         else:
             translation_noise = torch.randn((len(env_ids), 2), device=self.device) * 0.0
             yaw_rotation_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
+            fixed_height_noise = torch.randn((len(env_ids), ), device=self.device) * 0.0
 
         self.xy_translation_noise[env_ids] = translation_noise
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
@@ -960,6 +972,7 @@ class FactoryEnvResidual(DirectRLEnv):
         )[1]
 
         fixed_pos[:, :2] += translation_noise
+        fixed_pos[:, 2] += fixed_height_noise
         fixed_quat = torch_utils.quat_mul(
             fixed_quat,
             torch_utils.quat_from_euler_xyz(
@@ -1001,6 +1014,7 @@ class FactoryEnvResidual(DirectRLEnv):
         noised_qpos = self.compute_ik_abs(sim_eef[:, :7], init_qpos)
         self._set_replay_default_pose(joints=noised_qpos, env_ids=env_ids) # compute intermediate values there
 
+        self.quat_pred[env_ids] = self.fingertip_midpoint_quat[env_ids].clone()
         self.base_actions_agent.clear(env_ids)
         # if not self.teleop_mode:
         #     self._compute_base_actions()

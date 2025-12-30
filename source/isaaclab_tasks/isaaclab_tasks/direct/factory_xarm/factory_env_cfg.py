@@ -100,6 +100,7 @@ class ObsRandCfg:
 
     pos_aug = 0.02
     rot_aug = 2.0
+    height_aug = 0.002
 
 @configclass
 class BaseActionRandCfg:
@@ -274,6 +275,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             static_friction=1.0,
             dynamic_friction=1.0,
         ),
+        # render = sim_utils.RenderCfg(
+        #     rendering_mode="quality",
+        #     # user friendly setting overwrites
+        #     enable_translucency=True, # defaults to False in performance mode
+        #     enable_reflections=True, # defaults to False in performance mode
+        #     dlss_mode="3", # defaults to 1 in performance mode
+        #     )
     )
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=False)

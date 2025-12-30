@@ -106,8 +106,7 @@ class Hole8mm(FixedAssetCfg):
 
 @configclass
 class PegInsert(FactoryTask):
-    initial_poses_hf_file: str = "peginsert_train_data/data/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_hf_file: str = "peginsert_train_data/data/real_teleop_trajectories.npy" # NOTE: get this from teleop
+    train_data_hf_file: str = "data/peginsert_train_data.npy"
     close_gripper: float = 0.93
     
     name = "peg_insert"
@@ -351,12 +350,12 @@ class GearMesh(FactoryTask):
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=held_asset_cfg.mass),
             collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
-            # visual_material=sim_utils.PreviewSurfaceCfg(
-            #     diffuse_color=(0.1, 0.1, 0.05),
-            #     emissive_color=(0.1, 0.1, 0.0),
-            #     roughness=0.02,
-            #     metallic=0.0,
-            #     opacity=0.01),
+            # visual_material=sim_utils.GlassMdlCfg(
+            #     glass_color=(0.92, 0.92, 0.92),     # very light smoke tint (not pure white)
+            #     frosting_roughness=0.01,            # crisp highlight
+            #     thin_walled=True,                   # good for thin parts (your tray/walls)
+            #     glass_ior=1.49                      # acrylic-like
+            # ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
@@ -408,8 +407,7 @@ class BoltM32(FixedAssetCfg):
 class NutThread(FactoryTask):
     name = "nut_thread"
 
-    initial_poses_hf_file: str = "nutthread_train_data/data/initial_poses.pt" # NOTE: get this from replay (also validate)
-    action_data_hf_file: str = "nutthread_train_data/data/real_teleop_trajectories.npy" # NOTE: get this from teleop
+    train_data_hf_file: str = "data/nutthread_train_data.npy"
     close_gripper: float = 0.39
     
     fixed_asset_cfg = BoltM32()
