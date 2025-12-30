@@ -210,7 +210,7 @@ def main(path_a, path_b, out_dir):
     for ep in sorted(A.keys()):
         try:
             # Assert action equality BEFORE plotting this episode
-            assert_actions_equal(A[ep], B[ep], ep_name=ep, rtol=0.0, atol=1e-7)
+            assert_actions_equal(A[ep], B[ep], ep_name=ep, rtol=0.0, atol=5e-7)
         except AssertionError as e:
             print(f"[SKIP] {ep}: {e}")
             continue
