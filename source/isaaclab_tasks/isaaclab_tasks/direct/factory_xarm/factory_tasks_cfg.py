@@ -212,7 +212,7 @@ class MediumGear(HeldAssetCfg):
 @configclass
 class GearMesh(FactoryTask):
     train_data_hf_file: str = "data/gearmesh_train_data.npy"
-    diffusion_path: str = "models/gearmesh_base_dp"
+    diffusion_path: str = "models/gearmesh_bc_base_c40000_b256"
 
     close_gripper: float = 0.69
     name = "gear_mesh"
