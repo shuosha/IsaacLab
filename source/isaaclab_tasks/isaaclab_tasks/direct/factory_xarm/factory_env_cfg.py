@@ -141,9 +141,8 @@ class CtrlCfg:
     rot_action_threshold = [0.097, 0.097, 0.097]
     gripper_action_threshold = [0.1]
 
-    res_pos_action_threshold = [0.03, 0.03, 0.03] # 0.25mm -> action 0.5mm
-    res_rot_action_threshold = [0.097, 0.097, 0.097]
-    res_gripper_action_threshold = [0.1]
+    res_pos_action_threshold = [0.03, 0.03, 0.03] # 3 cm
+    res_rot_action_threshold = [0.5, 0.5, 0.5] # 30 deg
 
     Kx_dmr_range = [100, 300]
     Kr_dmr_range = [50, 125]
@@ -162,13 +161,12 @@ class CtrlCfg:
     kd_null = 6.3246
 
     # Admittance control parameters
-    K = [200.0, 200.0, 200.0, 50.0, 50.0, 50.0]
-    D = [63.0, 63.0, 63.0, 6.3, 6.3, 6.3]
-    M = [5.0, 5.0, 5.0, 0.2, 0.2, 0.2]
+    Kx = 150.0
+    Kr = 100.0
+    mx = 0.1
+    mr = 0.01
     lam = 1e-2
-    rot_scale = 0.25
-    v_task_limits = (0.25, 0.6)
-    qd_limit=1.5
+    rot_scale = 1.25
 
 @configclass
 class FactoryEnvCfg(DirectRLEnvCfg):
@@ -204,6 +202,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "fingertip_pos_rel_held", 
         "ee_linvel", 
         "ee_angvel", 
+        "base_fingertip_pos",
+        "base_fingertip_quat",
     ]
 
     residual_state_order: list = [
