@@ -142,7 +142,7 @@ class CtrlCfg:
     gripper_action_threshold = [0.1]
 
     res_pos_action_threshold = [0.03, 0.03, 0.03] # 3 cm
-    res_rot_action_threshold = [0.5, 0.5, 0.5] # 30 deg
+    res_rot_action_threshold = [0.097, 0.097, 0.097] # 30 deg
 
     Kx_dmr_range = [100, 300]
     Kr_dmr_range = [50, 125]
