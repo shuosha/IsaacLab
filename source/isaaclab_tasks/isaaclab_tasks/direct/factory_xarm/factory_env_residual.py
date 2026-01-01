@@ -747,7 +747,7 @@ class FactoryEnvResidual(DirectRLEnv):
             yaw_delta_deg = yaw_delta * 180.0 / math.pi
             
             # Only accumulate yaw rotation when task_engaged
-            acc_condition = torch.logical_and(task_engaged, gripper_closed)
+            acc_condition = torch.logical_and(task_engaged, grasp_successes)
             self.cumulative_rotation[acc_condition] += torch.abs(yaw_delta_deg[acc_condition])
             
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
@@ -759,7 +759,7 @@ class FactoryEnvResidual(DirectRLEnv):
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
-        action_delta = 1e-2 * torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter * 1e-2
+        action_delta = 1e-1 * torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter * 1e-2
 
         # if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
         #     task_successes = torch.logical_and(task_successes, grasp_successes)
@@ -782,7 +782,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         gripper_pred = ((self.residual_actions[:, 6:7] + 1.0) * 0.5)
         gripper_target = self.base_actions[:, 7:8]
-        gripper_error = 1e-3 * torch.abs(gripper_pred - gripper_target).squeeze(-1)
+        gripper_error = 1e-2 * torch.abs(gripper_pred - gripper_target).squeeze(-1)
 
         rew_dict = {
             "action_delta": -action_delta,
