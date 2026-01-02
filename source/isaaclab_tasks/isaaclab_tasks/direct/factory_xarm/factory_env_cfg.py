@@ -130,6 +130,12 @@ class EnvOptionsCfg:
     }
     teleop_mode = False
 
+    grasp_success_reward_scale = 1.0
+    task_engage_reward_scale = 1.0
+    task_success_reward_scale = 1.0
+    action_delta_reward_scale = 1e-1
+    gripper_error_reward_scale = 1e-2
+
 @configclass
 class CtrlCfg:
     ema_factor = 0.2
@@ -142,7 +148,7 @@ class CtrlCfg:
     gripper_action_threshold = [0.1]
 
     res_pos_action_threshold = [0.03, 0.03, 0.03] # 3 cm
-    res_rot_action_threshold = [0.097, 0.097, 0.097] # 30 deg
+    res_rot_action_threshold = [0.5, 0.5, 0.5] # 30 deg
 
     Kx_dmr_range = [100, 300]
     Kr_dmr_range = [50, 125]

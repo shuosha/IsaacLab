@@ -759,7 +759,7 @@ class FactoryEnvResidual(DirectRLEnv):
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
-        action_delta = 1e-1 * torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter * 1e-2
+        action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter
 
         # if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
         #     task_successes = torch.logical_and(task_successes, grasp_successes)
@@ -782,14 +782,14 @@ class FactoryEnvResidual(DirectRLEnv):
 
         gripper_pred = ((self.residual_actions[:, 6:7] + 1.0) * 0.5)
         gripper_target = self.base_actions[:, 7:8]
-        gripper_error = 1e-2 * torch.abs(gripper_pred - gripper_target).squeeze(-1)
+        gripper_error = torch.abs(gripper_pred - gripper_target).squeeze(-1)
 
         rew_dict = {
-            "action_delta": -action_delta,
-            "gripper_error": -gripper_error,
-            "grasp_success": grasp_successes.float(),
-            "task_engaged": task_engaged.float(),
-            "task_success": task_successes.float(),
+            "action_delta": -action_delta * self.cfg.env_options.action_delta_reward_scale,
+            "gripper_error": -gripper_error * self.cfg.env_options.gripper_error_reward_scale,
+            "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
+            "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
+            "task_success": task_successes.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
         for rew_name, rew in rew_dict.items():
