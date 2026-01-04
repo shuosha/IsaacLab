@@ -8,8 +8,10 @@ fi
 
 task="$1"
 ckpt_path="$2"
+base="${3:-nn}" # default to nn if not provided
 python scripts/reinforcement_learning/rl_games/visualize_failure_cases.py \
     --task Isaac-Factory-Xarm-${task}-Residual \
     --num_envs 20 \
     --checkpoint "${ckpt_path}/nn/FactoryXarm.pth" \
-    --enable_cameras --output_name "$(basename "${ckpt_path}")"
+    --enable_cameras --output_name "$(basename "${ckpt_path}_${base}")" \
+    --base ${base} \

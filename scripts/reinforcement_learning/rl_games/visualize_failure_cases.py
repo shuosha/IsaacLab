@@ -41,6 +41,7 @@ parser.add_argument(
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 parser.add_argument("--output_name", type=str, default="no_name", help="Name of the output directory to save images.")
+parser.add_argument("--base", choices=["nn", "bc"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -169,10 +170,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
-        "eval_mode": True,        
     }
-    env_cfg.env_options.verbose = False
+    env_cfg.env_options.base_model = args_cli.base if args_cli.base is not None else env_cfg.env_options.base_model
+    env_cfg.env_options.ctrl_dmr = True
+    env_cfg.env_options.obs_dmr = True
+    env_cfg.env_options.data_aug = False
+    env_cfg.env_options.step_eps = True
+    env_cfg.env_options.offline_base = False
+    # env_cfg.env_options.measure_force = True
     env_cfg.env_options.enable_cameras = True
+    env_cfg.env_options.verbose = False
 
     intr_mat = env_cfg.intr
     intr_mat = np.array(intr_mat).reshape(3, 3)

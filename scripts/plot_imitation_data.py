@@ -64,7 +64,7 @@ def load_points_base_from_json(data_root: Path) -> np.ndarray:
     return np.stack(pts, axis=0)  # (N,3)
 
 
-def load_points_base_from_npy(npy_path: Path) -> np.ndarray:
+def load_points_base_from_npy(npy_path: Path, key="obs.fingertip_pos") -> np.ndarray:
     """
     Load points from data.npy where:
       data = { episode_name: { 'obs.fingertip_pos': (T,3), ... } }
@@ -75,14 +75,13 @@ def load_points_base_from_npy(npy_path: Path) -> np.ndarray:
 
     pts = []
     for ep in data.values():
-        if "obs.fingertip_pos" not in ep:
+        if key not in ep:
             continue
-        arr = np.asarray(ep["obs.fingertip_pos"], dtype=np.float32)  # (T,3)
+        arr = np.asarray(ep[key], dtype=np.float32)  # (T,3)
         pts.append(arr)
 
     if not pts:
-        raise ValueError("No 'obs.fingertip_pos' found in npy file")
-
+        raise ValueError(f"No '{key}' found in npy file")
     return np.concatenate(pts, axis=0)  # (N,3)
 
 
@@ -141,13 +140,15 @@ def main():
                     help="Root with episode_*/robot/*.json")
     ap.add_argument("--npy-path", type=str, default=None,
                     help="Optional path to data.npy (overrides --data-root)")
+    ap.add_argument("--key", type=str, default="obs.fingertip_pos",
+                    help="Key to visualize from npy file")
     ap.add_argument("--out", type=str, default="overlay.png")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--max-points", type=int, default=200000)
     args = ap.parse_args()
 
     if args.npy_path is not None:
-        pts_base = load_points_base_from_npy(Path(args.npy_path))
+        pts_base = load_points_base_from_npy(Path(args.npy_path), key=args.key)
     else:
         if args.data_root is None:
             raise ValueError("Must provide either --data-root or --npy-path")

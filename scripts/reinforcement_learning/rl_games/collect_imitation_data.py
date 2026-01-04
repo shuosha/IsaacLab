@@ -38,6 +38,7 @@ parser.add_argument("--num_episodes", type=int, required=True)
 # image saving control: default ON; provide --no_images to disable
 parser.add_argument("--no_images", dest="save_images", action="store_false", help="Disable saving images (only save states for successful episodes)")
 parser.set_defaults(save_images=True)
+parser.add_argument("--base", choices=["nn", "bc"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
 
 # launch args
 AppLauncher.add_app_launcher_args(parser)
@@ -249,8 +250,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
-        "eval_mode": False,        
     }
+    env_cfg.env_options.base_model = args_cli.base if args_cli.base is not None else env_cfg.env_options.base_model
+    env_cfg.env_options.ctrl_dmr = True
+    env_cfg.env_options.obs_dmr = True
+    env_cfg.env_options.data_aug = True
+    env_cfg.env_options.step_eps = True
+    env_cfg.env_options.offline_base = False
+    # env_cfg.env_options.measure_force = True
     env_cfg.env_options.verbose = False
     env_cfg.env_options.enable_cameras = args_cli.enable_cameras
 
@@ -337,6 +344,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Collector
     collector = DataCollector(args_cli.output_dir, num_envs)
 
+    infos_dir = Path(args_cli.output_dir) / "infos"
+    os.makedirs(infos_dir, exist_ok=True)
+    infos = {
+        "checkpoint": str(resume_path),
+        "base": str(args_cli.base),
+        # "env_cfg": env_cfg,
+        "num_succ_episodes": int(args_cli.num_episodes),
+    }
+    with open(infos_dir / "infos.json", "w") as f:
+        json.dump(infos, f, indent=2)
+
+
     # Reset env
     obs = env.reset()
     if isinstance(obs, dict):
@@ -369,7 +388,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env_actions_tensor = env_unwrapped.env_actions  # (N, A)
             success_tensor = env_unwrapped.ep_succeeded    # (N,) bool/0-1
 
-            obs_np_all = obs[:, :-14].detach().cpu().numpy() # exclude base action and prev residual action
+            obs_np_all = obs[:, :20].detach().cpu().numpy() # exclude base action and prev residual action
             act_np_all = env_actions_tensor.detach().cpu().numpy()
             if args_cli.enable_cameras:
                 img_np_all = img_tensor.detach().cpu().numpy()
@@ -397,6 +416,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                     if collector.episodes_collected > prev_collected:
                         pbar.update(collector.episodes_collected - prev_collected)
                         prev_collected = collector.episodes_collected
+            
+            if collector.episodes_collected >= max_episodes:
+                break
     
     pbar.close()
 

@@ -20,7 +20,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
     "--agent", type=str, default="rl_games_cfg_entry_point", help="Name of the RL agent configuration entry point."
@@ -62,6 +62,7 @@ import os
 import random
 import time
 import torch
+import numpy as np
 
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
@@ -106,10 +107,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "failed_envs": False,      # red tint
     }
     env_cfg.env_options.base_model = args_cli.base if args_cli.base is not None else env_cfg.env_options.base_model
-    env_cfg.env_options.ctrl_dmr = True
-    env_cfg.env_options.obs_dmr = True
-    env_cfg.env_options.data_aug = True
-    env_cfg.env_options.step_eps = True
+    env_cfg.env_options.ctrl_dmr = False
+    env_cfg.env_options.obs_dmr = False
+    env_cfg.env_options.data_aug = False
+    env_cfg.env_options.step_eps = False
     env_cfg.env_options.offline_base = False
     # env_cfg.env_options.measure_force = True
     # env_cfg.env_options.enable_cameras = True
@@ -205,14 +206,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
+    eps_idx = 0
+    out_dict = {
+        f"episode_{eps_idx:04d}": None
+    }
+    curr_fingertip_pos = []
+    base_fingertip_pos = []
+    net_fingertip_pos = []
+
     # reset environment
     obs = env.reset()
+    env.unwrapped.episode_idx[0] = eps_idx
     if isinstance(obs, dict):
         obs = obs["obs"]
-    tot_eps = 0
-    tot_suc = 0
-    terminal_eps = 200
-    pbar = tqdm(total=terminal_eps, desc="Rollouts", unit="ep")
+
     timestep = 0
     # required: enables the flag for batched observations
     _ = agent.get_batch_size(obs, 1)
@@ -231,24 +238,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs = agent.obs_to_torch(obs)
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+
+            curr_fingertip_pos.append(env.unwrapped.fingertip_midpoint_pos[0, :3].cpu().numpy())
+            base_fingertip_pos.append(env.unwrapped.base_actions[0, :3].cpu().numpy())
+            net_fingertip_pos.append(env.unwrapped.env_actions[0, :3].cpu().numpy())
+            
             # env stepping
             obs, _, dones, _ = env.step(actions)
             if dones.any():
-                completed = dones.sum().item()
-                succeeded = env.unwrapped.ep_succeeded[dones].sum().item()
-
-                tot_eps += completed
-                tot_suc += succeeded
-
-                update_val = min(completed, max(0, terminal_eps - pbar.n))
-                if update_val > 0:
-                    pbar.update(update_val)
-
-                success_rate = tot_suc / tot_eps if tot_eps > 0 else 0.0
-                pbar.set_postfix({"success_rate": f"{success_rate:.3f}"})
-
-            if tot_eps >= terminal_eps:
-                print("final success rate:", tot_suc / tot_eps)
                 break
 
             # perform operations for terminated episodes
@@ -267,10 +264,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # sleep_time = dt - (time.time() - start_time)
         # if args_cli.real_time and sleep_time > 0:
         #     time.sleep(sleep_time)
-
-    pbar.close()
     # close the simulator
     env.close()
+
+    out_dict = {
+        "episode_0000": {
+            "curr_fingertip_pos": np.array(curr_fingertip_pos), # (T, 3)
+            "base_fingertip_pos": np.array(base_fingertip_pos), # (T, 3)
+            "net_fingertip_pos": np.array(net_fingertip_pos), # (T, 3)
+        }
+    }
+
+    np.save("vis_distr_shift_output.npy", out_dict)
 
 
 if __name__ == "__main__":
