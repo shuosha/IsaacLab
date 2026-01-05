@@ -747,7 +747,7 @@ class FactoryEnvResidual(DirectRLEnv):
             yaw_delta_deg = yaw_delta * 180.0 / math.pi
             
             # Only accumulate yaw rotation when task_engaged
-            acc_condition = torch.logical_and(task_engaged, gripper_closed)
+            acc_condition = torch.logical_and(task_engaged, grasp_successes)
             self.cumulative_rotation[acc_condition] += torch.abs(yaw_delta_deg[acc_condition])
             
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
