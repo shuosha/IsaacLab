@@ -264,6 +264,10 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.enable_cameras:
             self.front_camera = TiledCamera(self.cfg.front_camera_cfg)
             self.scene.sensors["front_camera"] = self.front_camera
+            self.left_camera = TiledCamera(self.cfg.left_camera_cfg)
+            self.scene.sensors["left_camera"] = self.left_camera
+            self.right_camera = TiledCamera(self.cfg.right_camera_cfg)
+            self.scene.sensors["right_camera"] = self.right_camera
 
         self.scene.clone_environments(copy_from_source=False)
         if self.device == "cpu":
@@ -388,6 +392,8 @@ class FactoryEnvResidual(DirectRLEnv):
 
         if self.enable_cameras:
             self.front_rgb = self.front_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
+            self.left_rgb = self.left_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
+            self.right_rgb = self.right_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
 
         self.joint_pos = self._robot.data.joint_pos.clone()
         self.joint_vel = self._robot.data.joint_vel.clone()
@@ -755,7 +761,7 @@ class FactoryEnvResidual(DirectRLEnv):
             
             # Compute rotation reward: 1 if rotation >= 360°
             task_successes = torch.where(
-                self.cumulative_rotation >= 180.0,
+                self.cumulative_rotation >= 240.0,
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
@@ -844,6 +850,8 @@ class FactoryEnvResidual(DirectRLEnv):
 
         if self.enable_cameras:
             self.front_camera.reset(env_ids=env_ids)
+            self.left_camera.reset(env_ids=env_ids)
+            self.right_camera.reset(env_ids=env_ids)
 
         if self.cfg.env_options.ctrl_dmr:
             self.Kx[env_ids] = self.cfg.ctrl.Kx_dmr_range[0] + (self.cfg.ctrl.Kx_dmr_range[1] - self.cfg.ctrl.Kx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)

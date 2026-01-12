@@ -133,8 +133,8 @@ class EnvOptionsCfg:
     grasp_success_reward_scale = 1.0
     task_engage_reward_scale = 1.0
     task_success_reward_scale = 1.0
-    action_delta_reward_scale = 1e-1
-    gripper_error_reward_scale = 1e-2
+    action_delta_reward_scale = 1e-2
+    gripper_error_reward_scale = 1e-3
 
 @configclass
 class CtrlCfg:
@@ -380,8 +380,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         spawn=FRONT_PINHOLE_CFG,
     )
 
-    right_teleop_camera_cfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/right_teleop_camera",
+    right_camera_cfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/right_camera",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.47, -0.26, 0.035), rot=(0.668, 0.686, 0.194, 0.212), convention="opengl"), # z-down; x-forward # greater angle = towards gripper
         height=H,
         width=W,
@@ -392,8 +392,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         spawn=FRONT_PINHOLE_CFG,
     )
 
-    left_teleop_camera_cfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/left_teleop_camera",
+    left_camera_cfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/left_camera",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.515, 0.15, 0.13), rot=(0.273, 0.238, 0.416, 0.834), convention="opengl"), # z-down; x-forward # greater angle = towards gripper
         height=H,
         width=W,

@@ -417,7 +417,7 @@ class NutThread(FactoryTask):
     fixed_asset_cfg = BoltM32()
     held_asset_cfg = NutM32()
     asset_size = 16.0
-    duration_s = 30.0
+    duration_s = 40.0
 
     # Robot
     hand_init_pos: list = [0.0, 0.0, 0.015]  # Relative to fixed asset tip.
