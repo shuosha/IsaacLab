@@ -17,7 +17,7 @@ from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, ISAAC_NUCLEUS_DIR
-from isaaclab.utils.math import quat_from_matrix
+from isaaclab.utils.math import quat_from_matrix, matrix_from_quat
 from isaaclab.markers import VisualizationMarkersCfg
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
@@ -76,11 +76,29 @@ FRONT_INTR = [
     0.0, 0.0, 1.0
 ]
 
+RIGHT_INTR = [
+    100.0,   0.0, 100.0,
+    0.0, 100.0, 100.0,
+    0.0,   0.0,   1.0,
+]
+
 FRONT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
     intrinsic_matrix=FRONT_INTR,
     height=H,
     width=W,
     # focal_length=1.93
+)
+
+LEFT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
+    intrinsic_matrix=FRONT_INTR,
+    height=200,
+    width=200,
+)
+
+RIGHT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
+    intrinsic_matrix=FRONT_INTR,
+    height=200,
+    width=200,
 )
 
 # FRONT_PINHOLE_CFG.horizontal_aperture_offset = -0.04
@@ -92,6 +110,20 @@ front2base[0, 3] -= 0.0065  # adjust for sim vs real diff
 R_front2base = front2base[:3, :3]
 q_front2base = quat_from_matrix(torch.from_numpy(R_front2base)).tolist() # wxyz
 t_front2base = front2base[:3, 3].tolist()
+
+t_left2base = [0.515, 0.15, 0.13]
+q_left2base = [0.273, 0.238, 0.416, 0.834]
+m_left2base = matrix_from_quat(torch.tensor(q_left2base)).numpy()
+left2base = np.eye(4)
+left2base[:3, :3] = m_left2base
+left2base[:3, 3] = t_left2base
+
+t_right2base = [0.47, -0.26, 0.035]
+q_right2base = [0.668, 0.686, 0.194, 0.212]
+m_right2base = matrix_from_quat(torch.tensor(q_right2base)).numpy()
+right2base = np.eye(4)
+right2base[:3, :3] = m_right2base
+right2base[:3, 3] = t_right2base
 
 @configclass
 class ObsRandCfg:
@@ -118,6 +150,7 @@ class EnvOptionsCfg:
     data_aug = True
     step_eps = True
     offline_base = False
+    eval_mode = False
     
     verbose = False
 
@@ -133,8 +166,8 @@ class EnvOptionsCfg:
     grasp_success_reward_scale = 1.0
     task_engage_reward_scale = 1.0
     task_success_reward_scale = 1.0
-    action_delta_reward_scale = 1e-2
-    gripper_error_reward_scale = 1e-3
+    action_delta_reward_scale = 1e-3
+    gripper_error_reward_scale = 1e-2
 
 @configclass
 class CtrlCfg:
@@ -259,8 +292,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     ctrl: CtrlCfg = CtrlCfg()
     base_rand: BaseActionRandCfg = BaseActionRandCfg()
     env_options: EnvOptionsCfg = EnvOptionsCfg()
-    intr = FRONT_INTR
-    extr = front2base.tolist()
+    front_intr = FRONT_INTR
+    left_intr = FRONT_INTR
+    right_intr = FRONT_INTR
+    
+    front_extr = front2base.tolist()
+    left_extr = left2base.tolist()
+    right_extr = right2base.tolist()
 
     episode_length_s = 10.0  # Probably need to override.
     sim: SimulationCfg = SimulationCfg(
@@ -382,26 +420,26 @@ class FactoryEnvCfg(DirectRLEnvCfg):
 
     right_camera_cfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/right_camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.47, -0.26, 0.035), rot=(0.668, 0.686, 0.194, 0.212), convention="opengl"), # z-down; x-forward # greater angle = towards gripper
-        height=H,
-        width=W,
+        offset=TiledCameraCfg.OffsetCfg(pos=t_right2base, rot=q_right2base, convention="opengl"), # z-down; x-forward # greater angle = towards gripper
+        height=200,
+        width=200,
         data_types=[
             "rgb",
             # "distance_to_image_plane",
             ],
-        spawn=FRONT_PINHOLE_CFG,
+        spawn=RIGHT_PINHOLE_CFG,
     )
 
     left_camera_cfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/left_camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=(0.515, 0.15, 0.13), rot=(0.273, 0.238, 0.416, 0.834), convention="opengl"), # z-down; x-forward # greater angle = towards gripper
-        height=H,
-        width=W,
+        offset=TiledCameraCfg.OffsetCfg(pos=t_left2base, rot=q_left2base, convention="opengl"), # z-down; x-forward # greater angle = towards gripper
+        height=200,
+        width=200,
         data_types=[
             "rgb",
             # "distance_to_image_plane",
             ],
-        spawn=FRONT_PINHOLE_CFG,
+        spawn=LEFT_PINHOLE_CFG,
     )
 
 

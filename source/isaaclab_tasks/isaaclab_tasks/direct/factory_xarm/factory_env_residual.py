@@ -544,8 +544,10 @@ class FactoryEnvResidual(DirectRLEnv):
             -self.sim_fingertip2eef,
         )[1]
 
-        gripper_action = ((self.residual_actions[:, 6:7] + 1.0) * 0.5) * 1.6  # [-1, 1] to [0, 1.6]
-        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
+        if self.cfg.env_options.eval_mode:
+            ctrl_target_gripper_dof_pos = torch.clamp(((self.residual_actions[:, 6:7] + 1.0) * 0.5), 0.0, 1.0) * 1.6  # [-1, 1] to [0, 1.6]
+        else:
+            ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
@@ -761,7 +763,7 @@ class FactoryEnvResidual(DirectRLEnv):
             
             # Compute rotation reward: 1 if rotation >= 360°
             task_successes = torch.where(
-                self.cumulative_rotation >= 240.0,
+                self.cumulative_rotation >= 270.0,
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
