@@ -496,7 +496,8 @@ class FactoryEnvResidual(DirectRLEnv):
         if len(env_ids) > 0:
             self._reset_buffers(env_ids)
 
-        self.residual_actions = self.ema_factor * action.clone().to(self.device) + (1 - self.ema_factor) * self.residual_actions
+        self.residual_actions[:, :6] = self.ema_factor * action.clone().to(self.device)[:,:6] + (1 - self.ema_factor) * self.residual_actions[:, :6]
+        self.residual_actions[:, 6:7] = action.clone().to(self.device)[:,6:7]  # no smoothing for gripper
 
     def _apply_action(self):
         """Apply actions for policy as delta targets from current position."""
@@ -791,6 +792,9 @@ class FactoryEnvResidual(DirectRLEnv):
         gripper_pred = ((self.residual_actions[:, 6:7] + 1.0) * 0.5)
         gripper_target = self.base_actions[:, 7:8]
         gripper_error = torch.abs(gripper_pred - gripper_target).squeeze(-1)
+        # print("gripper pred: ", gripper_pred.mean().item())
+        # print("gripper target: ", gripper_target.mean().item())
+        # print("gripper error: ", gripper_error.mean().item())
 
         rew_dict = {
             "action_delta": -action_delta * self.cfg.env_options.action_delta_reward_scale,
