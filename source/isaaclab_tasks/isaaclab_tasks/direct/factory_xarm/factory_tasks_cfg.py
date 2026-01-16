@@ -7,6 +7,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+from isaaclab.sensors import ContactSensorCfg
 
 from .factory_utils import resolve_hf_file
 
@@ -87,7 +88,6 @@ class FactoryTask:
     success_threshold: float = 0.04
     engage_threshold: float = 0.9
 
-
 @configclass
 class Peg8mm(HeldAssetCfg):
     usd_path = f"{ASSET_DIR}/factory_peg_8mm.usd"
@@ -107,7 +107,7 @@ class Hole8mm(FixedAssetCfg):
 @configclass
 class PegInsert(FactoryTask):
     train_data_hf_file: str = "data/peginsert_train_data.npy"
-    diffusion_path: str = "models/bc_teleop/peginsert_bc_teleop_c40k_b2048"
+    diffusion_path: str = "models/bc_teleop/peginsert_bc_teleop_c40k_b256"
 
     close_gripper: float = 0.93
     
@@ -192,6 +192,14 @@ class PegInsert(FactoryTask):
         actuators={},
     )
 
+    held_asset_contact_sensor_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/HeldAsset/forge_round_peg_8mm",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*", "/World/envs/env_.*/Table"],
+    )
+
 
 @configclass
 class GearBase(FixedAssetCfg):
@@ -214,7 +222,7 @@ class MediumGear(HeldAssetCfg):
 @configclass
 class GearMesh(FactoryTask):
     train_data_hf_file: str = "data/gearmesh_train_data.npy"
-    diffusion_path: str = "models/bc_teleop/gearmesh_bc_teleop_c40k_b2048"
+    diffusion_path: str = "models/bc_teleop/gearmesh_bc_teleop_c40k_b256"    
 
     close_gripper: float = 0.69
     name = "gear_mesh"
@@ -366,6 +374,13 @@ class GearMesh(FactoryTask):
         actuators={},
     )
 
+    held_asset_contact_sensor_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/HeldAsset/factory_gear_medium",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*", "/World/envs/env_.*/Table"],
+    )
 
 @configclass
 class NutM16(HeldAssetCfg):
@@ -411,7 +426,7 @@ class NutThread(FactoryTask):
     name = "nut_thread"
 
     train_data_hf_file: str = "data/nutthread_train_data.npy"
-    diffusion_path: str = "models/bc_teleop/nutthread_bc_teleop_c40k_b2048"
+    diffusion_path: str = "models/bc_teleop/nutthread_bc_teleop_c40k_b256"
     close_gripper: float = 0.39
     
     fixed_asset_cfg = BoltM32()
@@ -497,3 +512,12 @@ class NutThread(FactoryTask):
         ),
         actuators={},
     )
+
+    held_asset_contact_sensor_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/HeldAsset/m36_nut", # or Root
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*", "/World/envs/env_.*/Table"],
+    )
+

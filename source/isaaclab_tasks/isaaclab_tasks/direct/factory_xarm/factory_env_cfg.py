@@ -163,11 +163,13 @@ class EnvOptionsCfg:
     }
     teleop_mode = False
 
-    grasp_success_reward_scale = 1.0
-    task_engage_reward_scale = 1.0
-    task_success_reward_scale = 1.0
-    action_delta_reward_scale = 1e-3
-    gripper_error_reward_scale = 1e-2
+    grasp_success_reward_scale = 0.0
+    task_engage_reward_scale = 0.0
+
+    task_success_reward_scale = 200.0
+    action_norm_reward_scale = 1e-1
+    tilt_penalty_reward_scale = 1.0
+    force_penalty_reward_scale = 1.0
 
 @configclass
 class CtrlCfg:
@@ -182,6 +184,7 @@ class CtrlCfg:
 
     res_pos_action_threshold = [0.03, 0.03, 0.03] # 3 cm
     res_rot_action_threshold = [0.5, 0.5, 0.5] # 30 deg
+    res_gripper_action_threshold = [0.5] # half open close
 
     Kx_dmr_range = [100, 300]
     Kr_dmr_range = [50, 125]
@@ -243,6 +246,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "ee_angvel", 
         "base_fingertip_pos",
         "base_fingertip_quat",
+        "base_gripper"
     ]
 
     residual_state_order: list = [

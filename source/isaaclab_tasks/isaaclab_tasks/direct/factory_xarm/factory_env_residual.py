@@ -167,6 +167,9 @@ class FactoryEnvResidual(DirectRLEnv):
         self.rot_threshold = torch.tensor(self.cfg.ctrl.res_rot_action_threshold, device=self.device).repeat(
             (self.num_envs, 1)
         )
+        self.gripper_threshold = torch.tensor(self.cfg.ctrl.gripper_action_threshold, device=self.device).repeat(
+            (self.num_envs, 1)
+        )
 
         # Set masses and frictions.
         factory_utils.set_friction(self._held_asset, self.cfg_task.held_asset_cfg.friction, self.scene.num_envs)
@@ -260,6 +263,12 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.measure_force:
             self.eef_contact_sensor = ContactSensor(self.cfg.eef_contact_sensor_cfg)
             self.scene.sensors["eef_contact_sensor"] = self.eef_contact_sensor
+
+            # self.fixed_asset_contact_sensor = ContactSensor(self.cfg_task.fixed_asset_contact_sensor_cfg)
+            # self.scene.sensors["fixed_asset_contact_sensor"] = self.fixed_asset_contact_sensor
+
+            self.held_asset_contact_sensor = ContactSensor(self.cfg_task.held_asset_contact_sensor_cfg)
+            self.scene.sensors["held_asset_contact_sensor"] = self.held_asset_contact_sensor
 
         if self.enable_cameras:
             self.front_camera = TiledCamera(self.cfg.front_camera_cfg)
@@ -390,6 +399,9 @@ class FactoryEnvResidual(DirectRLEnv):
             self.eef_force = self.eef_contact_sensor.data.net_forces_w.squeeze(1) # (num_envs, 3)
             self.F_ext = torch.cat([self.eef_force, torch.zeros((self.num_envs, 3), device=self.device)], dim=-1) # (num_envs, 6)
 
+            # self.fixed_asset_force = self.fixed_asset_contact_sensor.data.net_forces_w.squeeze(1) # (num_envs, 3)
+            self.held_asset_force = self.held_asset_contact_sensor.data.net_forces_w.squeeze(1) # (num_envs, 3)
+
         if self.enable_cameras:
             self.front_rgb = self.front_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
             self.left_rgb = self.left_camera.data.output["rgb"] # (num_envs, H, W, 3) (0-255)
@@ -496,8 +508,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if len(env_ids) > 0:
             self._reset_buffers(env_ids)
 
-        self.residual_actions[:, :6] = self.ema_factor * action.clone().to(self.device)[:,:6] + (1 - self.ema_factor) * self.residual_actions[:, :6]
-        self.residual_actions[:, 6:7] = action.clone().to(self.device)[:,6:7]  # no smoothing for gripper
+        self.residual_actions = self.ema_factor * action.clone().to(self.device) + (1 - self.ema_factor) * self.residual_actions
 
     def _apply_action(self):
         """Apply actions for policy as delta targets from current position."""
@@ -530,13 +541,13 @@ class FactoryEnvResidual(DirectRLEnv):
 
         ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.base_actions[:, 3:7])
 
-        target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(ctrl_target_fingertip_midpoint_quat), dim=1)
-        target_euler_xyz[:, 0] = 3.14159  # Restrict actions to be upright.
-        target_euler_xyz[:, 1] = 0.0
+        # target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(ctrl_target_fingertip_midpoint_quat), dim=1)
+        # target_euler_xyz[:, 0] = 3.14159  # Restrict actions to be upright.
+        # target_euler_xyz[:, 1] = 0.0
 
-        ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
-            roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
-        )
+        # ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
+        #     roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
+        # )
 
         ctrl_target_eef_pos = torch_utils.tf_combine(
             ctrl_target_fingertip_midpoint_quat,
@@ -545,10 +556,9 @@ class FactoryEnvResidual(DirectRLEnv):
             -self.sim_fingertip2eef,
         )[1]
 
-        if self.cfg.env_options.eval_mode:
-            ctrl_target_gripper_dof_pos = torch.clamp(((self.residual_actions[:, 6:7] + 1.0) * 0.5), 0.0, 1.0) * 1.6  # [-1, 1] to [0, 1.6]
-        else:
-            ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8], 0.0, 1.0) * 1.6
+        grip_actions = self.residual_actions[:, 6:7] * self.gripper_threshold
+        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + grip_actions, 0.0, 1.0) * 1.6
+
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
@@ -753,11 +763,12 @@ class FactoryEnvResidual(DirectRLEnv):
             # Compute smallest signed delta between prev and current yaw
             yaw_delta = curr_held_yaw - self.prev_held_yaw
             yaw_delta = (yaw_delta + math.pi) % (2 * math.pi) - math.pi  # wrap delta to [-pi, pi]
-            yaw_delta_deg = yaw_delta * 180.0 / math.pi
             
             # Only accumulate yaw rotation when task_engaged
             acc_condition = torch.logical_and(task_engaged, grasp_successes)
-            self.cumulative_rotation[acc_condition] += torch.abs(yaw_delta_deg[acc_condition])
+            # CW progress: count only negative yaw change (CW) as forward progress
+            cw_progress = torch.clamp(-yaw_delta, min=0.0)  # radians, >=0
+            self.cumulative_rotation[acc_condition] += (cw_progress[acc_condition] * 180.0 / math.pi)
             
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
             self.prev_held_yaw = curr_held_yaw.clone()
@@ -768,7 +779,7 @@ class FactoryEnvResidual(DirectRLEnv):
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
-        action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter
+        # action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter
 
         # if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
         #     task_successes = torch.logical_and(task_successes, grasp_successes)
@@ -789,18 +800,34 @@ class FactoryEnvResidual(DirectRLEnv):
         self.eps_task_succeeded[task_successes] = 1
         task_successes = torch.logical_and(task_successes, first_task_succeeded)
 
-        gripper_pred = ((self.residual_actions[:, 6:7] + 1.0) * 0.5)
-        gripper_target = self.base_actions[:, 7:8]
-        gripper_error = torch.abs(gripper_pred - gripper_target).squeeze(-1)
-        # print("gripper pred: ", gripper_pred.mean().item())
-        # print("gripper target: ", gripper_target.mean().item())
-        # print("gripper error: ", gripper_error.mean().item())
+        # --- tilt penalty ---
+        # local tool axis (choose the one that should point downward)
+        a_local = torch.tensor([0., 0., 1.], device=self.device).expand(self.num_envs, 3)
+        # rotate local axis into world frame
+        a_world = torch_utils.quat_rotate(self.env_actions[:, 3:7], a_local)   # (N,3)
+        # desired direction: world -Z
+        z_down = torch.tensor([0., 0., -1.], device=self.device).expand_as(a_world)
+        # cosine alignment (yaw-invariant)
+        cos = (a_world * z_down).sum(dim=-1).clamp(-1.0, 1.0)
+        # tilt penalty (0 when perfectly aligned)
+        tilt_penalty = 1.0 - cos
+
+        # --- force penalty ---
+        F_held = torch.norm(self.held_asset_force, dim=1)
+        F0 = 10.0
+        F1 = 30.0
+        excess = torch.clamp(F_held - F0, min=0.0)
+        force_penalty = torch.clamp(excess / (F1 - F0), max=1.0)
+
+        # --- action norm penalty ---
+        action_norm = torch.norm(self.residual_actions, dim=1) / math.sqrt(self.cfg.action_space)
 
         rew_dict = {
-            "action_delta": -action_delta * self.cfg.env_options.action_delta_reward_scale,
-            "gripper_error": -gripper_error * self.cfg.env_options.gripper_error_reward_scale,
-            "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
-            "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
+            "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
+            "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
+            "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
+            # "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
+            # "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
             "task_success": task_successes.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
