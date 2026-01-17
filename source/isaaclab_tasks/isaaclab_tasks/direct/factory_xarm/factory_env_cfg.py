@@ -167,8 +167,9 @@ class EnvOptionsCfg:
     task_engage_reward_scale = 0.0
 
     task_success_reward_scale = 200.0
-    action_norm_reward_scale = 1e-1
-    tilt_penalty_reward_scale = 1.0
+    termination_reward_scale = 50.0
+    action_norm_reward_scale = 1.0
+    tilt_penalty_reward_scale = 2.0
     force_penalty_reward_scale = 1.0
 
 @configclass
