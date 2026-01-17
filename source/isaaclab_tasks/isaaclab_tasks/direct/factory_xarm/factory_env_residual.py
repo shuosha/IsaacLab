@@ -237,9 +237,6 @@ class FactoryEnvResidual(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.residual_actions)
         self.env_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
-        if self.cfg_task == "nut_thread":
-            self.picked_up = torch.where(self.held_pos[:, 2] > 0.03, torch.ones_like(self.picked_up), torch.zeros_like(self.picked_up)).bool()
-
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -424,6 +421,10 @@ class FactoryEnvResidual(DirectRLEnv):
         self.prev_fingertip_quat = self.fingertip_midpoint_quat.clone()
 
         self.last_update_timestamp = self._robot._data._sim_timestamp
+
+        if self.cfg_task.name == "nut_thread":
+            above = torch.where(self.held_pos[:, 2] > 0.03, torch.ones_like(self.picked_up), torch.zeros_like(self.picked_up)).bool()
+            self.picked_up = torch.logical_or(self.picked_up, above)
 
     def _get_factory_obs_state_dict(self):
         """Populate dictionaries for the policy and critic."""
@@ -617,15 +618,15 @@ class FactoryEnvResidual(DirectRLEnv):
             #     terminated |= self.bad_insert.bool()
             #     self.bad_insert[:] = 0
 
-            # if self.cfg_task.name == "peg_insert":
-            #     unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-            #     tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
-            #     terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
+            if self.cfg_task.name == "peg_insert":
+                unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+                tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
+                terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
 
-            # elif self.cfg_task.name == "nut_thread":
-            #     on_ground = self.held_pos[:, 2] < 0.02
-            #     dropped = torch.logical_and(on_ground, self.picked_up)
-            #     terminated |= dropped
+            if self.cfg_task.name == "nut_thread":
+                on_ground = self.held_pos[:, 2] < 0.02
+                dropped = torch.logical_and(on_ground, self.picked_up)
+                terminated |= dropped
         else:
             terminated = time_out.clone()
 
@@ -826,6 +827,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
+            "terminated": -self.reset_terminated.float() * self.cfg.env_options.termination_reward_scale,
             # "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
             # "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
             "task_success": task_successes.float() * self.cfg.env_options.task_success_reward_scale,
