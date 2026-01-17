@@ -734,7 +734,7 @@ class FactoryEnvResidual(DirectRLEnv):
         xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
         z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-        xy_threshold = 0.015
+        xy_threshold = 0.0025
         is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
         if self.cfg_task.name == "gear_mesh":
@@ -827,6 +827,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
+            "xy_align": is_centered.float() * self.cfg.env_options.xy_align_reward_scale,
             "terminated": -self.reset_terminated.float() * self.cfg.env_options.termination_reward_scale,
             # "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
             # "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
