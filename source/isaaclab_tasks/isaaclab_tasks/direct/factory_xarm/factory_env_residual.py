@@ -734,8 +734,9 @@ class FactoryEnvResidual(DirectRLEnv):
         xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
         z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-        xy_threshold = 0.0025
+        xy_threshold = 0.015
         is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
+        xy_align = torch.where(xy_dist < 0.0025, torch.ones_like(task_successes), torch.zeros_like(task_successes))
 
         if self.cfg_task.name == "gear_mesh":
             height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.2
@@ -764,19 +765,24 @@ class FactoryEnvResidual(DirectRLEnv):
             # Compute smallest signed delta between prev and current yaw
             yaw_delta = curr_held_yaw - self.prev_held_yaw
             yaw_delta = (yaw_delta + math.pi) % (2 * math.pi) - math.pi  # wrap delta to [-pi, pi]
+            yaw_delta_deg = yaw_delta * 180.0 / math.pi
             
             # Only accumulate yaw rotation when task_engaged
             acc_condition = torch.logical_and(task_engaged, grasp_successes)
-            # CW progress: count only negative yaw change (CW) as forward progress
-            cw_progress = torch.clamp(-yaw_delta, min=0.0)  # radians, >=0
-            self.cumulative_rotation[acc_condition] += (cw_progress[acc_condition] * 180.0 / math.pi)
+            self.cumulative_rotation[acc_condition] += torch.abs(yaw_delta_deg[acc_condition])
+            
+            # # Only accumulate yaw rotation when task_engaged
+            # acc_condition = torch.logical_and(task_engaged, grasp_successes)
+            # # CW progress: count only negative yaw change (CW) as forward progress
+            # cw_progress = torch.clamp(-yaw_delta, min=0.0)  # radians, >=0
+            # self.cumulative_rotation[acc_condition] += (cw_progress[acc_condition] * 180.0 / math.pi)
             
             # Always update previous yaw to avoid jumps when task_engaged becomes True again
             self.prev_held_yaw = curr_held_yaw.clone()
             
             # Compute rotation reward: 1 if rotation >= 360°
             task_successes = torch.where(
-                self.cumulative_rotation >= 270.0,
+                self.cumulative_rotation >= 180.0,
                 torch.ones_like(task_successes), torch.zeros_like(task_successes)
             )
 
@@ -827,7 +833,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
-            "xy_align": is_centered.float() * self.cfg.env_options.xy_align_reward_scale,
+            "xy_align": xy_align.float() * self.cfg.env_options.xy_align_reward_scale,
             "terminated": -self.reset_terminated.float() * self.cfg.env_options.termination_reward_scale,
             # "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
             # "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
