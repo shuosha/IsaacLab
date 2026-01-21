@@ -495,7 +495,7 @@ class FactoryEnvResidual(DirectRLEnv):
             use_noise = use_noise.unsqueeze(-1)
             noise = noise * use_noise
 
-            self.base_actions = self.apply_residual(noise, self.base_actions)
+            self.base_actions = self._apply_residual(noise, self.base_actions)
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.residual_obs_order + ["prev_actions"])
