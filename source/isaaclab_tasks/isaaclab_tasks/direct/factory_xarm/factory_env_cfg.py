@@ -138,6 +138,9 @@ class ObsRandCfg:
 class BaseActionRandCfg:
     horizon = [5, 15]
 
+    base_action_noise_range = [-0.2, 0.2]
+    base_action_noise_prob = 0.1
+
 @configclass
 class EnvOptionsCfg:
     measure_force = True

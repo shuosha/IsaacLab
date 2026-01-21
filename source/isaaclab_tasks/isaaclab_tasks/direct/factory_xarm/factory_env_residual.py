@@ -82,7 +82,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg.env_options.base_model == "bc":
             from lerobot.rrl.dp_wrapper import DPWrapper
             self.base_policy = DPWrapper(factory_utils.resolve_hf_path(self.cfg_task.hf_repo, self.cfg_task.diffusion_path))
-        elif self.cfg.env_options.base_model == "nn":
+        elif self.cfg.env_options.base_model == "nn" or self.cfg.env_options.base_model == "noisy_nn":
             self.base_policy = NearestNeighborBuffer(
                 factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file), 
                 self.num_envs, 
@@ -92,6 +92,11 @@ class FactoryEnvResidual(DirectRLEnv):
                 pad=True, # type: ignore
                 offline_base=self.cfg.env_options.offline_base,
             )
+            if self.cfg.env_options.base_model == "noisy_nn":
+                self.add_noise_to_base = True
+            else:
+                self.add_noise_to_base = False
+
         self.base_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
         # initial states
@@ -228,8 +233,6 @@ class FactoryEnvResidual(DirectRLEnv):
         self.rolling_success_rate = 0.0
         self.ema_alpha = 0.002 # 350 eps half life for 450 ts eps
 
-        self.eps_grasp_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
-        self.eps_task_engaged = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.eps_task_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
 
         self.residual_actions = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
@@ -484,6 +487,15 @@ class FactoryEnvResidual(DirectRLEnv):
             self._compute_nn_base_actions()
         elif not self.teleop_mode and self.cfg.env_options.base_model == "bc":
             self._compute_bc_base_actions()
+        if self.add_noise_to_base:
+            noise = torch.empty(self.num_envs, self.cfg.action_space, device=self.device).uniform_(
+                self.cfg.base_rand.base_action_noise_range[0], self.cfg.base_rand.base_action_noise_range[1]
+                )
+            use_noise = (torch.rand(self.num_envs, device=self.device) < self.cfg.base_rand.base_action_noise_prob).float()
+            use_noise = use_noise.unsqueeze(-1)
+            noise = noise * use_noise
+
+            self.base_actions = self.apply_residual(noise, self.base_actions)
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.residual_obs_order + ["prev_actions"])
@@ -498,8 +510,6 @@ class FactoryEnvResidual(DirectRLEnv):
         """Reset buffers."""
         self.ep_succeeded[env_ids] = 0
         self.ep_success_times[env_ids] = 0
-        self.eps_grasp_succeeded[env_ids] = 0
-        self.eps_task_engaged[env_ids] = 0
         self.eps_task_succeeded[env_ids] = 0
 
     def _pre_physics_step(self, action):
@@ -510,23 +520,16 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.residual_actions = self.ema_factor * action.clone().to(self.device) + (1 - self.ema_factor) * self.residual_actions
 
-    def _apply_action(self):
-        """Apply actions for policy as delta targets from current position."""
-        # Note: We use finite-differenced velocities for control and observations.
-        # Check if we need to re-compute velocities within the decimation loop.
-        if self.last_update_timestamp < self._robot._data._sim_timestamp:
-            self._compute_intermediate_values(dt=self.physics_dt)
-
+    def _apply_residual(self, residual_actions, base_actions):
         # Interpret actions as target pos displacements and set pos target
-        pos_actions = self.residual_actions[:, 0:3] * self.pos_threshold 
+        pos_actions = residual_actions[:, 0:3] * self.pos_threshold 
+        ctrl_target_fingertip_midpoint_pos = base_actions[:, 0:3] + pos_actions
 
         # Interpret actions as target rot (axis-angle) displacements
-        rot_actions = self.residual_actions[:, 3:6]
+        rot_actions = residual_actions[:, 3:6]
         # if self.cfg_task.unidirectional_rot:
         #     rot_actions[:, 2] = -(rot_actions[:, 2] + 1.0) * 0.5  # [-1, 0]
         rot_actions = rot_actions * self.rot_threshold
-
-        ctrl_target_fingertip_midpoint_pos = self.base_actions[:, 0:3] + pos_actions
 
         # Convert to quat and set rot target
         angle = torch.norm(rot_actions, p=2, dim=-1)
@@ -539,15 +542,26 @@ class FactoryEnvResidual(DirectRLEnv):
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1),
         )
 
-        ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, self.base_actions[:, 3:7])
+        ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, base_actions[:, 3:7])
 
-        # target_euler_xyz = torch.stack(torch_utils.get_euler_xyz(ctrl_target_fingertip_midpoint_quat), dim=1)
-        # target_euler_xyz[:, 0] = 3.14159  # Restrict actions to be upright.
-        # target_euler_xyz[:, 1] = 0.0
+        grip_actions = residual_actions[:, 6:7] * self.gripper_threshold
+        ctrl_target_gripper_dof_pos = torch.clamp(base_actions[:, 7:8] + grip_actions, 0.0, 1.0) * 1.6
 
-        # ctrl_target_fingertip_midpoint_quat = torch_utils.quat_from_euler_xyz(
-        #     roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
-        # )
+        return torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
+
+
+    def _apply_action(self):
+        """Apply actions for policy as delta targets from current position."""
+        # Note: We use finite-differenced velocities for control and observations.
+        # Check if we need to re-compute velocities within the decimation loop.
+        if self.last_update_timestamp < self._robot._data._sim_timestamp:
+            self._compute_intermediate_values(dt=self.physics_dt)
+
+        self.env_actions = self._apply_residual(self.residual_actions, self.base_actions)
+
+        ctrl_target_fingertip_midpoint_pos = self.env_actions[:, 0:3].clone()
+        ctrl_target_fingertip_midpoint_quat = self.env_actions[:, 3:7].clone()
+        ctrl_target_gripper_dof_pos = self.env_actions[:, 7:8].clone()
 
         ctrl_target_eef_pos = torch_utils.tf_combine(
             ctrl_target_fingertip_midpoint_quat,
@@ -556,15 +570,10 @@ class FactoryEnvResidual(DirectRLEnv):
             -self.sim_fingertip2eef,
         )[1]
 
-        grip_actions = self.residual_actions[:, 6:7] * self.gripper_threshold
-        ctrl_target_gripper_dof_pos = torch.clamp(self.base_actions[:, 7:8] + grip_actions, 0.0, 1.0) * 1.6
-
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
         elif self.cfg_task.name == "nut_thread":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=0.75)
-
-        self.env_actions = torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
 
         self.generate_ctrl_signals(
             ctrl_target_eef_pos=ctrl_target_eef_pos,
