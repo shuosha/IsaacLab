@@ -239,6 +239,8 @@ class FactoryEnvResidual(DirectRLEnv):
         self.prev_actions = torch.zeros_like(self.residual_actions)
         self.env_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
+        self.rew_sum = None
+
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -826,6 +828,25 @@ class FactoryEnvResidual(DirectRLEnv):
             "task_success": first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
+
+        GREEN = "\033[92m"
+        RED   = "\033[91m"
+        RESET = "\033[0m"
+
+        if self.rew_sum is None:
+            self.rew_sum = {k: 0.0 for k in rew_dict.keys()}
+
+        for rew_name, rew in rew_dict.items():
+            self.rew_sum[rew_name] += rew.mean().item()
+
+        if self.common_step_counter % 50 == 0:
+            print(f"=== Iter: {self.common_step_counter // 50} ===")
+            for rew_name, rew in self.rew_sum.items():
+                val = rew / 50
+                color = GREEN if val >= 0 else RED
+                print(f"{rew_name}: {color}{val:.4f}{RESET}")
+                self.rew_sum[rew_name] = 0.0
+
         for rew_name, rew in rew_dict.items():
             rew_buf += rew_dict[rew_name]
 
