@@ -76,7 +76,6 @@ class FactoryEnvResidual(DirectRLEnv):
         """Initialize buffers specific to residual policy."""
         self.verbose = self.cfg.env_options.verbose
         self.teleop_mode = self.cfg.env_options.teleop_mode
-
         self.vis_options = self.cfg.env_options.vis_options
 
         # base policy
@@ -712,139 +711,116 @@ class FactoryEnvResidual(DirectRLEnv):
             self.extras[f"logs_rew_{rew_name}"] = rew.mean()
 
     def _get_rewards(self):
-        """Update rewards and compute success statistics."""
-        # Get successful and failed envs at current timestep
-        task_successes = self._get_curr_successes(
+        """Compute dense shaping + terminal reward + diagnostics."""
+
+        # -------------------------
+        # Base success (task-specific threshold)
+        # -------------------------
+        task_success = self._get_curr_successes(
             success_threshold=self.cfg_task.success_threshold
+        ).to(torch.bool)
+
+        # -------------------------
+        # Held pose + target pose (task frame)
+        # -------------------------
+        held_pos, held_quat = factory_utils.get_held_base_pose(
+            self.held_pos, self.held_quat,
+            self.cfg_task.name, self.cfg_task.fixed_asset_cfg,
+            self.num_envs, self.device
+        )
+        target_pos, target_quat = factory_utils.get_target_held_base_pose(
+            self.fixed_pos, self.fixed_quat,
+            self.cfg_task.name, self.cfg_task.fixed_asset_cfg,
+            self.num_envs, self.device
         )
 
-        held_base_pos, held_base_quat = factory_utils.get_held_base_pose(
-            self.held_pos, self.held_quat, self.cfg_task.name, self.cfg_task.fixed_asset_cfg, self.num_envs, self.device
-        )
-        target_held_base_pos, target_held_base_quat = factory_utils.get_target_held_base_pose(
-            self.fixed_pos,
-            self.fixed_quat,
-            self.cfg_task.name,
-            self.cfg_task.fixed_asset_cfg,
-            self.num_envs,
-            self.device,
-        )
+        # -------------------------
+        # XY alignment shaping + (optional) precondition for nut_thread
+        # -------------------------
+        xy_dist = torch.linalg.vector_norm(target_pos - held_pos, dim=1)          # (N,)
+        z_disp  = (held_pos[:, 2] - target_pos[:, 2])                            # (N,)
 
-        # Relaxed Rewards:
-        xy_dist = torch.linalg.vector_norm(target_held_base_pos - held_base_pos, dim=1)
-        z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
+        xy_align_thresh  = 0.010
+        xy_aligned  = (xy_dist < xy_align_thresh)
 
-        xy_threshold = 0.015
-        is_centered = torch.where(xy_dist < xy_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-        xy_align = torch.where(xy_dist < 0.0025, torch.ones_like(task_successes), torch.zeros_like(task_successes))
-
-        if self.cfg_task.name == "gear_mesh":
-            height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.2
-        elif self.cfg_task.name == "peg_insert":
-            height_threshold = self.cfg_task.fixed_asset_cfg.height * 1.5
-        elif self.cfg_task.name == "nut_thread":
-            height_threshold = 0.01
-        is_close_or_below = torch.where(
-            z_disp < height_threshold, torch.ones_like(task_successes), torch.zeros_like(task_successes)
-        )
-        self.log(f"xy_dist: {xy_dist.mean().item():.4f}, goal {xy_threshold}")
-        self.log(f"z_disp: {z_disp.mean().item():.4f}, goal {height_threshold}")
-        task_engaged = torch.logical_and(is_centered, is_close_or_below)
-
-        grasp_dist = torch.linalg.vector_norm(self.held_pos_obs_frame - self.fingertip_midpoint_pos, dim=1)
-        grasp_dist_satisfied = grasp_dist < 0.01
-        gripper_closed = self.gripper.squeeze(-1) >= self.cfg_task.close_gripper
-        grasp_successes = torch.logical_and(grasp_dist_satisfied, gripper_closed)
-
-        # Track held asset yaw rotation only for nut_thread task, only when task-engaged
+        # -------------------------
+        # nut_thread: track accumulated rotation ONLY when precondition holds AND gripper closed
+        # -------------------------
         if self.cfg_task.name == "nut_thread":
-            # Extract yaw from held asset quaternion
-            _, _, curr_held_yaw = torch_utils.get_euler_xyz(self.held_quat)
-            curr_held_yaw = (curr_held_yaw + math.pi) % (2 * math.pi) - math.pi  # wrap to [-pi, pi]
-            
-            # Compute smallest signed delta between prev and current yaw
-            yaw_delta = curr_held_yaw - self.prev_held_yaw
-            yaw_delta = (yaw_delta + math.pi) % (2 * math.pi) - math.pi  # wrap delta to [-pi, pi]
-            yaw_delta_deg = yaw_delta * 180.0 / math.pi
-            
-            # Only accumulate yaw rotation when task_engaged
-            acc_condition = torch.logical_and(task_engaged, grasp_successes)
-            self.cumulative_rotation[acc_condition] += torch.abs(yaw_delta_deg[acc_condition])
-            
-            # # Only accumulate yaw rotation when task_engaged
-            # acc_condition = torch.logical_and(task_engaged, grasp_successes)
-            # # CW progress: count only negative yaw change (CW) as forward progress
-            # cw_progress = torch.clamp(-yaw_delta, min=0.0)  # radians, >=0
-            # self.cumulative_rotation[acc_condition] += (cw_progress[acc_condition] * 180.0 / math.pi)
-            
-            # Always update previous yaw to avoid jumps when task_engaged becomes True again
-            self.prev_held_yaw = curr_held_yaw.clone()
-            
-            # Compute rotation reward: 1 if rotation >= 360°
-            task_successes = torch.where(
-                self.cumulative_rotation >= 180.0,
-                torch.ones_like(task_successes), torch.zeros_like(task_successes)
-            )
+            # check nut thread aligned precondition
+            xy_center_thresh = 0.015
+            xy_centered = (xy_dist < xy_center_thresh)
 
-        # action_delta = torch.norm(self.env_actions[:, :3] - self.base_actions[:, :3], dim=1)  # meter
+            z_close_thresh = 0.01
+            z_close_or_below = (z_disp < z_close_thresh)
 
-        # if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
-        #     task_successes = torch.logical_and(task_successes, grasp_successes)
-        #     self.bad_insert = torch.logical_and(task_successes, ~grasp_successes)
-        self.log(f"Grasp success: {grasp_successes.float().mean().item():.3f}")
-        self.log(f"Task engaged: {task_engaged.float().mean().item():.3f}")
-        self.log(f"Task success: {task_successes.float().mean().item():.3f}")
+            thread_precondition = (xy_centered & z_close_or_below)
 
-        first_grasp_succeeded = torch.logical_and(grasp_successes, torch.logical_not(self.eps_grasp_succeeded))
-        self.eps_grasp_succeeded[grasp_successes] = 1
-        grasp_successes = torch.logical_and(grasp_successes, first_grasp_succeeded)
+            # gripper condition for counting rotation
+            gripper_closed = (self.gripper.squeeze(-1) >= self.cfg_task.close_gripper)
 
-        first_task_engaged = torch.logical_and(task_engaged, torch.logical_not(self.eps_task_engaged))
-        self.eps_task_engaged[task_engaged] = 1
-        task_engaged = torch.logical_and(task_engaged, first_task_engaged)
+            # yaw unwrap increment (degrees)
+            _, _, yaw = torch_utils.get_euler_xyz(self.held_quat)
+            yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
 
-        first_task_succeeded = torch.logical_and(task_successes, torch.logical_not(self.eps_task_succeeded))
-        self.eps_task_succeeded[task_successes] = 1
-        task_successes = torch.logical_and(task_successes, first_task_succeeded)
+            dyaw = yaw - self.prev_held_yaw
+            dyaw = (dyaw + math.pi) % (2 * math.pi) - math.pi
+            dyaw_deg = dyaw * (180.0 / math.pi)
 
-        # --- tilt penalty ---
-        # local tool axis (choose the one that should point downward)
-        a_local = torch.tensor([0., 0., 1.], device=self.device).expand(self.num_envs, 3)
-        # rotate local axis into world frame
-        a_world = torch_utils.quat_rotate(self.env_actions[:, 3:7], a_local)   # (N,3)
-        # desired direction: world -Z
-        z_down = torch.tensor([0., 0., -1.], device=self.device).expand_as(a_world)
-        # cosine alignment (yaw-invariant)
+            # accumulate only when in valid regime
+            acc_mask = thread_precondition & gripper_closed
+            self.cumulative_rotation[acc_mask] += torch.abs(dyaw_deg[acc_mask])
+
+            # always update prev yaw to avoid jumps when mask toggles
+            self.prev_held_yaw = yaw.clone()
+
+            # override task success: need >= target rotation
+            rot_target_deg = 180.0  # change to 360.0 if you actually want a full turn
+            task_success = (self.cumulative_rotation >= rot_target_deg)
+
+        # -------------------------
+        # Tilt penalty (high priority)
+        # -------------------------
+        a_local = torch.tensor([0.0, 0.0, 1.0], device=self.device).expand(self.num_envs, 3)
+        a_world = torch_utils.quat_rotate(self.env_actions[:, 3:7], a_local)     # (N,3)
+        z_down  = torch.tensor([0.0, 0.0, -1.0], device=self.device).expand_as(a_world)
         cos = (a_world * z_down).sum(dim=-1).clamp(-1.0, 1.0)
-        # tilt penalty (0 when perfectly aligned)
-        tilt_penalty = 1.0 - cos
+        tilt_rad = torch.acos(cos)                                              # (N,)
+        tilt_penalty = tilt_rad
 
-        # --- force penalty ---
-        F_held = torch.norm(self.held_asset_force, dim=1)
-        F0 = 10.0
-        F1 = 30.0
-        excess = torch.clamp(F_held - F0, min=0.0)
-        force_penalty = torch.clamp(excess / (F1 - F0), max=1.0)
+        # -------------------------
+        # Contact-force penalty (soft)
+        # -------------------------
+        F = torch.norm(self.held_asset_force, dim=1)
+        F0, F1 = 10.0, 30.0
+        force_penalty = torch.clamp((F - F0).clamp_min(0.0) / (F1 - F0), max=1.0)
 
-        # --- action norm penalty ---
+        # -------------------------
+        # Action-norm penalty (soft)
+        # -------------------------
         action_norm = torch.norm(self.residual_actions, dim=1) / math.sqrt(self.cfg.action_space)
+
+        # -------------------------
+        # Terminal shaping + “first success only” bookkeeping
+        # -------------------------
+        # If you still want "pay once when first succeeded this episode":
+        first_success = task_success & (~self.eps_task_succeeded.to(torch.bool))
+        self.eps_task_succeeded[task_success] = 1
 
         rew_dict = {
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
             "xy_align": xy_align.float() * self.cfg.env_options.xy_align_reward_scale,
-            "terminated": -self.reset_terminated.float() * self.cfg.env_options.termination_reward_scale,
-            # "grasp_success": grasp_successes.float() * self.cfg.env_options.grasp_success_reward_scale,
-            # "task_engaged": task_engaged.float() * self.cfg.env_options.task_engage_reward_scale,
-            "task_success": task_successes.float() * self.cfg.env_options.task_success_reward_scale,
+            "terminated": (first_success.float() - self.reset_terminated.float()) * self.cfg.env_options.termination_reward_scale,
+            "task_success": first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
         for rew_name, rew in rew_dict.items():
             rew_buf += rew_dict[rew_name]
 
         self.prev_actions = self.residual_actions.clone()
-        self._log_factory_metrics(rew_dict, task_successes)
+        self._log_factory_metrics(rew_dict, first_success)
 
         if self.vis_options["rewards"] == True:
             try:

@@ -6,6 +6,61 @@ def quat_geodesic_angle(q1, q2, eps=1e-8):
     dot = (q1 * q2).sum(-1).abs().clamp(-1 + eps, 1 - eps)
     return 2 * torch.arccos(dot)
 
+def _slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    q0, q1: (..., 4) unit quats
+    t:      (...,) or (..., 1) in [0,1]
+    returns: (..., 4)
+    """
+    if t.ndim == q0.ndim - 1:
+        t = t.unsqueeze(-1)
+
+    q0 = q0 / q0.norm(dim=-1, keepdim=True).clamp_min(eps)
+    q1 = q1 / q1.norm(dim=-1, keepdim=True).clamp_min(eps)
+
+    # shortest path: if dot < 0, flip q1
+    dot = (q0 * q1).sum(dim=-1, keepdim=True)
+    q1 = torch.where(dot < 0, -q1, q1)
+    dot = dot.abs().clamp(-1 + eps, 1 - eps)
+
+    # if very close, lerp + renorm (avoids 0/0)
+    close = dot > (1.0 - 1e-4)
+    q_lin = q0 + t * (q1 - q0)
+    q_lin = q_lin / q_lin.norm(dim=-1, keepdim=True).clamp_min(eps)
+
+    omega = torch.arccos(dot)  # (...,1)
+    sin_omega = torch.sin(omega).clamp_min(eps)
+    w0 = torch.sin((1.0 - t) * omega) / sin_omega
+    w1 = torch.sin(t * omega) / sin_omega
+    q_slerp = w0 * q0 + w1 * q1
+    q_slerp = q_slerp / q_slerp.norm(dim=-1, keepdim=True).clamp_min(eps)
+
+    return torch.where(close, q_lin, q_slerp)
+
+def _interp_weights(H_max: int, H_env: torch.Tensor, gamma: float, device) -> torch.Tensor:
+    """
+    Returns w of shape (M, H_max) with:
+      - w[:,0] = 0  (first action matches prev chunk last action)
+      - w reaches 1 at step H_env-1 (so end of used horizon is fully 'new chunk')
+      - nonlinear bias toward new chunk via power curve u**gamma (gamma<1 biases to new)
+    """
+    M = H_env.shape[0]
+    ar = torch.arange(H_max, device=device).view(1, H_max).expand(M, H_max)  # (M,H_max)
+
+    # normalize by (H_env - 1), careful when H_env==1
+    denom = (H_env - 1).clamp_min(1).view(M, 1)  # (M,1)
+    u = (ar / denom).clamp(0.0, 1.0)             # (M,H_max)
+
+    w = u.pow(gamma)
+
+    # If H_env == 1, we should do "no blend": w=1 so we just use the retrieved action.
+    # (There is no "first action equals prev" constraint because horizon length is 1 step.)
+    is_one = (H_env == 1).view(M, 1)
+    w = torch.where(is_one, torch.ones_like(w), w)
+
+    return w
+
+
 
 class NearestNeighborBuffer:
     """Nearest-neighbor action retriever with per-env horizon queues."""
@@ -98,6 +153,10 @@ class NearestNeighborBuffer:
         self._replay_mode = bool(offline_base)
         self._replay_ptr = torch.zeros(num_envs, dtype=torch.long, device=self._device)
 
+        # --- chunk-to-chunk continuity ---
+        self._interp_gamma = 0.5  # <1 biases toward new chunk (nonlinear). try 0.3~0.7
+        self._prev_last_action = torch.zeros((num_envs, 8), device=self._device)
+        self._has_prev_last = torch.zeros((num_envs,), dtype=torch.bool, device=self._device)
 
     # --- public helpers ---
 
@@ -120,6 +179,10 @@ class NearestNeighborBuffer:
         self._q_ptr[env_ids] = 0
         self._q_len[env_ids] = 0
         self._replay_ptr[env_ids] = 0
+
+        self._has_prev_last[env_ids] = False
+        # (optional) self._prev_last_action[env_ids] = 0
+
 
     # --- core NN ---
 
@@ -242,20 +305,56 @@ class NearestNeighborBuffer:
                 torch.gather(ag, 1, gi1),
             ], dim=-1)  # (M, H_max, 8)
 
-            self._queued[ids] = a
-            self._queued_idx[ids] = idx
-
-            # 🔹 Sample a fresh horizon for these envs
+                        # --- Sample a fresh horizon for these envs (already in your code, but move it BEFORE blending) ---
             H_env = torch.randint(
                 low=self._min_horizon,
-                high=self._max_horizon + 1,  # upper bound is exclusive
+                high=self._max_horizon + 1,
                 size=(ids.numel(),),
                 device=self._device,
             )
 
+            # --- Chunk-to-chunk continuity: blend new chunk toward prev chunk's last action ---
+            # Only for envs that have a previous last action.
+            have_prev = self._has_prev_last[ids]  # (M,)
+
+            if have_prev.any():
+                prev = self._prev_last_action[ids]             # (M,8)
+                prev = prev.unsqueeze(1).expand(-1, self._max_horizon, -1)  # (M,H,8)
+
+                w = _interp_weights(self._max_horizon, H_env, self._interp_gamma, self._device)  # (M,H)
+                w8 = w.unsqueeze(-1)  # (M,H,1)
+
+                # pos (0:3) linear
+                a_pos = (1.0 - w8) * prev[..., 0:3] + w8 * a[..., 0:3]
+
+                # quat (3:7) SLERP
+                prev_q = prev[..., 3:7]
+                new_q  = a[..., 3:7]
+                a_quat = _slerp(prev_q, new_q, w)
+
+                # gripper (7:8) linear
+                a_grip = (1.0 - w8) * prev[..., 7:8] + w8 * a[..., 7:8]
+
+                a_blend = torch.cat([a_pos, a_quat, a_grip], dim=-1)
+
+                # Apply blending only for those envs that actually have_prev
+                mask_hp = have_prev.view(-1, 1, 1)  # (M,1,1)
+                a = torch.where(mask_hp, a_blend, a)
+
+            # Now write queued actions (blended or not)
+            self._queued[ids] = a
+            self._queued_idx[ids] = idx
+
+            # store horizons + reset pointers (your existing logic)
             self._horizon_env[ids] = H_env
             self._q_ptr[ids] = 0
             self._q_len[ids] = H_env
+
+            # --- update prev_last_action to "last action of THIS chunk" (the executed last step) ---
+            last_step = (H_env - 1).clamp_min(0)  # (M,)
+            a_last = a[torch.arange(ids.numel(), device=self._device), last_step, :]  # (M,8)
+            self._prev_last_action[ids] = a_last
+            self._has_prev_last[ids] = True
 
         env_ids = torch.arange(N, device=self._device)
         step_idx = torch.minimum(self._q_ptr, (self._q_len - 1).clamp(min=0))
