@@ -850,7 +850,7 @@ class FactoryEnvResidual(DirectRLEnv):
                 print(f"{rew_name}: {color}{val:.4f}{RESET}")
                 self.rew_sum[rew_name] = 0.0
                 mean_rew += val
-            print("mean rew: ", )
+            print("mean rew: ", mean_rew)
             print()   # trailing blank line
 
         for rew_name, rew in rew_dict.items():
