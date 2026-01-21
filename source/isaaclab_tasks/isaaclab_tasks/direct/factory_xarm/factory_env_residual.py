@@ -746,11 +746,12 @@ class FactoryEnvResidual(DirectRLEnv):
         # -------------------------
         # XY alignment shaping + (optional) precondition for nut_thread
         # -------------------------
-        xy_dist = torch.linalg.vector_norm(target_pos - held_pos, dim=1)          # (N,)
+        xy_dist_held_fixed = torch.linalg.vector_norm(target_pos[:, :2] - held_pos[:, :2], dim=1)          # (N,)
+        xy_dist_eef_held = torch.linalg.vector_norm(self.fingertip_midpoint_pos[:, :2] - held_pos[:, :2], dim=1)  # (N,)
         z_disp  = (held_pos[:, 2] - target_pos[:, 2])                            # (N,)
 
-        xy_align_thresh  = 0.010
-        xy_aligned  = (xy_dist < xy_align_thresh)
+        xy_align_thresh  = 0.005
+        xy_aligned  = (xy_dist_held_fixed < xy_align_thresh).float() + (xy_dist_eef_held < xy_align_thresh).float()
 
         # -------------------------
         # nut_thread: track accumulated rotation ONLY when precondition holds AND gripper closed
@@ -758,7 +759,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg_task.name == "nut_thread":
             # check nut thread aligned precondition
             xy_center_thresh = 0.015
-            xy_centered = (xy_dist < xy_center_thresh)
+            xy_centered = (xy_dist_held_fixed < xy_center_thresh)
 
             z_close_thresh = 0.01
             z_close_or_below = (z_disp < z_close_thresh)
