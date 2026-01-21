@@ -811,7 +811,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
-            "xy_align": xy_align.float() * self.cfg.env_options.xy_align_reward_scale,
+            "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
             "terminated": (first_success.float() - self.reset_terminated.float()) * self.cfg.env_options.termination_reward_scale,
             "task_success": first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
