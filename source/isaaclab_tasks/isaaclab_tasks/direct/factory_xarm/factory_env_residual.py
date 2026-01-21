@@ -620,7 +620,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg.env_options.step_eps:
             dist_threshold = 0.2
             terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold # to eliminate the case where held asset falls far away
-            terminated |= self.ep_succeeded.bool()
+            terminated |= self.eps_task_succeeded.bool()
 
             # if self.cfg_task.name == "gear_mesh" or self.cfg_task.name == "peg_insert":
             #     terminated |= self.bad_insert.bool()
@@ -629,7 +629,7 @@ class FactoryEnvResidual(DirectRLEnv):
             if self.cfg_task.name == "peg_insert":
                 unit_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
                 tilt_degrees = factory_utils.quat_geodesic_angle(self.held_quat, unit_quat) * 180.0 / math.pi
-                terminated |= torch.where(tilt_degrees > 30.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
+                terminated |= torch.where(tilt_degrees > 60.0, torch.ones_like(terminated), torch.zeros_like(terminated)).bool()
 
             if self.cfg_task.name == "nut_thread":
                 on_ground = self.held_pos[:, 2] < 0.02
@@ -639,7 +639,7 @@ class FactoryEnvResidual(DirectRLEnv):
             terminated = time_out.clone()
 
         done = torch.logical_or(time_out, terminated)
-        s = self.ep_succeeded[done].float()  # shape [n_finished]
+        s = self.eps_task_succeeded[done].float()  # shape [n_finished]
         n = s.numel()
         if n > 0:
             alpha = self.ema_alpha
