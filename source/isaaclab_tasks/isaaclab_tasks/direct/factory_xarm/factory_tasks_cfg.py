@@ -34,7 +34,7 @@ class HeldAssetCfg:
 
 @configclass
 class RobotCfg:
-    hf_repo = "shashuo0104/rrl_data_v2"
+    hf_repo = "shashuo0104/rrl_data_v3"
     robot_hf_file: str = "assets/robot/xarm7_gripper.usd"
     robot_usd: str = ""
     xarm_fingerpad_length: float = 0.04
@@ -43,7 +43,7 @@ class RobotCfg:
 
 @configclass
 class FactoryTask:
-    hf_repo = "shashuo0104/rrl_data_v2"
+    hf_repo = "shashuo0104/rrl_data_v3"
     robot_cfg: RobotCfg = RobotCfg()
     name: str = ""
     duration_s = 5.0
