@@ -493,6 +493,7 @@ class FactoryEnvResidual(DirectRLEnv):
             noise = torch.empty(self.num_envs, self.cfg.action_space, device=self.device).uniform_(
                 self.cfg.base_rand.base_action_noise_range[0], self.cfg.base_rand.base_action_noise_range[1]
                 )
+            noise[:, -1] = 0.0  # no noise on gripper
             use_noise = (torch.rand(self.num_envs, device=self.device) < self.cfg.base_rand.base_action_noise_prob).float()
             use_noise = use_noise.unsqueeze(-1)
             noise = noise * use_noise

@@ -42,7 +42,7 @@ parser.add_argument(
     help="if toggled, this experiment will be tracked with Weights and Biases",
 )
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
-parser.add_argument("--base", choices=["nn", "bc"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
+parser.add_argument("--base", choices=["nn", "bc", "noisy_nn"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
