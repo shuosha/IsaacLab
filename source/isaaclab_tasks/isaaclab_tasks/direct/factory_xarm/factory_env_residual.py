@@ -241,6 +241,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.rew_sum = None
 
+        self.base_noise_state = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
+        self.noise_gate = torch.zeros(self.num_envs, 1, device=self.device)
+        self.noise_amp  = torch.zeros(self.num_envs, 1, device=self.device)
+
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -431,26 +435,26 @@ class FactoryEnvResidual(DirectRLEnv):
             self.picked_up = torch.logical_or(self.picked_up, above)
 
     def _add_noise_to_base(self):
-        # 1) smooth correlated noise
-        alpha = self.cfg.base_rand.noise_smooth_alpha  # e.g. 0.98-0.995
+        N, d = self.num_envs, self.cfg.action_space
+        dev = self.device
+
+        # --- (1) Smooth noise process n_t (low-pass filtered uniform) ---
+        alpha = self.cfg.base_rand.noise_smooth_alpha          # e.g. 0.98-0.995
         lo, hi = self.cfg.base_rand.base_action_noise_range
-        eps = torch.empty(self.num_envs, self.cfg.action_space, device=self.device).uniform_(lo, hi)
-        eps[:, -1] = 0.0 # no noise on gripper
+
+        eps = torch.empty(N, d, device=dev).uniform_(lo, hi)
+        eps[:, -1] = 0.0  # no noise on gripper
         self.base_noise_state = alpha * self.base_noise_state + (1.0 - alpha) * eps
 
-        # 2) switch "noisy mode" occasionally, but apply it smoothly
-        # p_switch is per-step chance to re-sample whether this env is in noisy mode
-        p_switch = self.cfg.base_rand.noise_mode_switch_prob  # e.g. 0.01
-        new_mode = (torch.rand(self.num_envs, 1, device=self.device) < self.cfg.base_rand.base_action_noise_prob).float()
-        do_switch = (torch.rand(self.num_envs, 1, device=self.device) < p_switch).float()
+        # --- (2) Smooth per-step "noisy?" gate g_t in [0,1] ---
+        p_on = self.cfg.base_rand.noise_on_prob                # noise probability per step
+        g_tgt = (torch.rand(N, 1, device=dev) < p_on).float()
 
-        mode_target = do_switch * new_mode + (1.0 - do_switch) * self.noise_mode  # piecewise-constant target
+        beta_g = self.cfg.base_rand.noise_gate_smooth_beta     # e.g. 0.95-0.995
+        self.noise_gate = beta_g * self.noise_gate + (1.0 - beta_g) * g_tgt
 
-        # low-pass the mode itself to avoid on/off steps
-        beta = self.cfg.base_rand.noise_mode_smooth_beta  # e.g. 0.95-0.995 (higher = slower transitions)
-        self.noise_mode = beta * self.noise_mode + (1.0 - beta) * mode_target
-
-        noise = self.base_noise_state * self.noise_mode
+        # --- Apply ---
+        noise = self.base_noise_state * self.noise_gate
         self.base_actions = self._apply_residual(noise, self.base_actions)
 
     def _get_factory_obs_state_dict(self):
@@ -508,7 +512,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
-        if not self.teleop_mode and self.cfg.env_options.base_model == "nn":
+        if not self.teleop_mode and (self.cfg.env_options.base_model == "nn" or self.cfg.env_options.base_model == "noisy_nn"):
             self._compute_nn_base_actions()
         elif not self.teleop_mode and self.cfg.env_options.base_model == "bc":
             self._compute_bc_base_actions()
@@ -1039,10 +1043,15 @@ class FactoryEnvResidual(DirectRLEnv):
         noised_qpos = self.compute_ik_abs(sim_eef[:, :7], init_qpos)
         self._set_replay_default_pose(joints=noised_qpos, env_ids=env_ids) # compute intermediate values there
 
+        # clear base policy action chunk
         if self.cfg.env_options.base_model == "bc":
             self.base_policy.reset()
-        elif self.cfg.env_options.base_model == "nn":
+        elif self.cfg.env_options.base_model == "nn" or self.cfg.env_options.base_model == "noisy_nn":
             self.base_policy.clear(env_ids)
+        
+        if self.add_noise_to_base:
+            self.base_noise_state[env_ids] = 0.0
+            self.noise_gate[env_ids] = 0.0
 
         _, fixed_tip_pos = torch_utils.tf_combine(
             self.fixed_quat[env_ids],

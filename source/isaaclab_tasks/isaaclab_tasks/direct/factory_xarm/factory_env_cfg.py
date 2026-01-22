@@ -139,10 +139,10 @@ class BaseActionRandCfg:
     horizon = [5, 15]
 
     noise_smooth_alpha = 0.98
-    base_action_noise_range = [-0.2, 0.2]
+    noise_gate_smooth_beta = 0.95
 
-    noise_mode_smooth_beta = 0.95
-    noise_mode_switch_prob = 0.25
+    base_action_noise_range = [-0.2, 0.2]
+    noise_on_prob = 0.25
 
 @configclass
 class EnvOptionsCfg:
