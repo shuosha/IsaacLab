@@ -138,8 +138,11 @@ class ObsRandCfg:
 class BaseActionRandCfg:
     horizon = [5, 15]
 
+    noise_smooth_alpha = 0.98
     base_action_noise_range = [-0.2, 0.2]
-    base_action_noise_prob = 0.1
+
+    noise_mode_smooth_beta = 0.95
+    noise_mode_switch_prob = 0.25
 
 @configclass
 class EnvOptionsCfg:

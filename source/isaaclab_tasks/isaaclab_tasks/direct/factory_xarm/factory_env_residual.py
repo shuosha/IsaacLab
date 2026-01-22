@@ -430,6 +430,29 @@ class FactoryEnvResidual(DirectRLEnv):
             above = torch.where(self.held_pos[:, 2] > 0.03, torch.ones_like(self.picked_up), torch.zeros_like(self.picked_up)).bool()
             self.picked_up = torch.logical_or(self.picked_up, above)
 
+    def _add_noise_to_base(self):
+        # 1) smooth correlated noise
+        alpha = self.cfg.base_rand.noise_smooth_alpha  # e.g. 0.98-0.995
+        lo, hi = self.cfg.base_rand.base_action_noise_range
+        eps = torch.empty(self.num_envs, self.cfg.action_space, device=self.device).uniform_(lo, hi)
+        eps[:, -1] = 0.0 # no noise on gripper
+        self.base_noise_state = alpha * self.base_noise_state + (1.0 - alpha) * eps
+
+        # 2) switch "noisy mode" occasionally, but apply it smoothly
+        # p_switch is per-step chance to re-sample whether this env is in noisy mode
+        p_switch = self.cfg.base_rand.noise_mode_switch_prob  # e.g. 0.01
+        new_mode = (torch.rand(self.num_envs, 1, device=self.device) < self.cfg.base_rand.base_action_noise_prob).float()
+        do_switch = (torch.rand(self.num_envs, 1, device=self.device) < p_switch).float()
+
+        mode_target = do_switch * new_mode + (1.0 - do_switch) * self.noise_mode  # piecewise-constant target
+
+        # low-pass the mode itself to avoid on/off steps
+        beta = self.cfg.base_rand.noise_mode_smooth_beta  # e.g. 0.95-0.995 (higher = slower transitions)
+        self.noise_mode = beta * self.noise_mode + (1.0 - beta) * mode_target
+
+        noise = self.base_noise_state * self.noise_mode
+        self.base_actions = self._apply_residual(noise, self.base_actions)
+
     def _get_factory_obs_state_dict(self):
         """Populate dictionaries for the policy and critic."""
         if self.cfg.env_options.obs_dmr:
@@ -490,15 +513,7 @@ class FactoryEnvResidual(DirectRLEnv):
         elif not self.teleop_mode and self.cfg.env_options.base_model == "bc":
             self._compute_bc_base_actions()
         if self.add_noise_to_base:
-            noise = torch.empty(self.num_envs, self.cfg.action_space, device=self.device).uniform_(
-                self.cfg.base_rand.base_action_noise_range[0], self.cfg.base_rand.base_action_noise_range[1]
-                )
-            noise[:, -1] = 0.0  # no noise on gripper
-            use_noise = (torch.rand(self.num_envs, device=self.device) < self.cfg.base_rand.base_action_noise_prob).float()
-            use_noise = use_noise.unsqueeze(-1)
-            noise = noise * use_noise
-
-            self.base_actions = self._apply_residual(noise, self.base_actions)
+            self._add_noise_to_base()
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.residual_obs_order + ["prev_actions"])
