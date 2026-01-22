@@ -839,13 +839,14 @@ class FactoryEnvResidual(DirectRLEnv):
         for rew_name, rew in rew_dict.items():
             self.rew_sum[rew_name] += rew.mean().item()
 
-        if self.common_step_counter % 50 == 0:
+        log_rew_int = 100
+        if self.common_step_counter % log_rew_int == 0:
             mean_rew = 0.0
             print("\n" + "=" * 50)
-            print(f" Iter {self.common_step_counter // 50}")
+            print(f" Iter {self.common_step_counter // log_rew_int}")
             print("=" * 50)
             for rew_name, rew in self.rew_sum.items():
-                val = rew / 50
+                val = rew / log_rew_int
                 color = GREEN if val >= 0 else RED
                 print(f"{rew_name}: {color}{val:.4f}{RESET}")
                 self.rew_sum[rew_name] = 0.0
