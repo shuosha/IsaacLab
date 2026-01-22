@@ -542,6 +542,8 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.residual_actions = self.ema_factor * action.clone().to(self.device) + (1 - self.ema_factor) * self.residual_actions
 
+        self.env_actions = self._apply_residual(self.residual_actions, self.base_actions)
+
     def _apply_residual(self, residual_actions, base_actions):
         # Interpret actions as target pos displacements and set pos target
         pos_actions = residual_actions[:, 0:3] * self.pos_threshold 
@@ -578,8 +580,6 @@ class FactoryEnvResidual(DirectRLEnv):
         # Check if we need to re-compute velocities within the decimation loop.
         if self.last_update_timestamp < self._robot._data._sim_timestamp:
             self._compute_intermediate_values(dt=self.physics_dt)
-
-        self.env_actions = self._apply_residual(self.residual_actions, self.base_actions)
 
         ctrl_target_fingertip_midpoint_pos = self.env_actions[:, 0:3].clone()
         ctrl_target_fingertip_midpoint_quat = self.env_actions[:, 3:7].clone()
@@ -833,6 +833,11 @@ class FactoryEnvResidual(DirectRLEnv):
         action_norm = torch.norm(self.residual_actions, dim=1) / math.sqrt(self.cfg.action_space)
 
         # -------------------------
+        # Action-smoothing penalty (soft)
+        # -------------------------
+        action_smoothing = torch.norm(self.prev_actions - self.residual_actions, dim=1)
+
+        # -------------------------
         # Terminal shaping + “first success only” bookkeeping
         # -------------------------
         # If you still want "pay once when first succeeded this episode":
@@ -843,6 +848,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
+            "action_smoothing": -action_smoothing * self.cfg.env_options.action_smoothing_reward_scale,
             "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
             "terminated": torch.clamp(first_success.float() - self.reset_terminated.float(), max=0.0) * self.cfg.env_options.termination_reward_scale,
             "task_success": first_success.float() * self.cfg.env_options.task_success_reward_scale,
