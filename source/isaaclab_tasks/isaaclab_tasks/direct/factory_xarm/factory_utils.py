@@ -222,3 +222,27 @@ def resolve_hf_path(
 
     # Return the local directory corresponding to that prefix
     return str(Path(repo_local) / prefix)
+
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+def resolve_robot_assets_tree(repo_id: str, *, revision=None, cache_dir=None) -> str:
+    # Put a real directory tree somewhere stable (choose your own location)
+    local_dir = Path(cache_dir or "/tmp") / "hf_assets" / repo_id.replace("/", "__")
+
+    snapshot_root = snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        revision=revision,
+        local_dir=str(local_dir),
+        local_dir_use_symlinks=False,      # IMPORTANT: real files/dirs, not symlinks into blobs
+        allow_patterns=[
+            "assets/robot/**",
+            # If your repo stores meshes elsewhere, include that too:
+            "meshes/**",
+            "assets/meshes/**",
+        ],
+    )
+
+    robot_dir = Path(snapshot_root) / "assets/robot"
+    return str(robot_dir)

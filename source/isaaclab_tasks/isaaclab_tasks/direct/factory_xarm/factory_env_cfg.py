@@ -194,7 +194,7 @@ class CtrlCfg:
 
     Kx_dmr_range = [100, 300]
     Kr_dmr_range = [50, 125]
-    mx_dmr_range = [0.1, 0.2]
+    mx_dmr_range = [0.05, 0.15]
     mr_dmr_range = [0.01, 0.02]
     lam_dmr_range = [5e-3, 2e-2]
 
@@ -212,7 +212,7 @@ class CtrlCfg:
     Kx = 150.0
     Kr = 100.0
     mx = 0.1
-    mr = 0.01
+    mr = 0.015
     lam = 1e-2
     rot_scale = 1.25
 

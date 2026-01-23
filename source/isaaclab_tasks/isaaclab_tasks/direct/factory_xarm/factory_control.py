@@ -13,7 +13,7 @@ import torch
 
 import isaacsim.core.utils.torch as torch_utils
 
-from isaaclab.utils.math import axis_angle_from_quat
+from isaaclab.utils.math import axis_angle_from_quat, quat_from_angle_axis
 
 
 def compute_dof_torque(
@@ -374,3 +374,47 @@ def _recover_args_for_debug(
         F_ext, Kx, Dx, mx, Kr, Dr, mr, lam, rot_scale, v_task_limits, qd_limit
     )
 
+def adm_ctrl_task_space(
+    pos, quat,  
+    pos_g, quat_g, 
+    v, F_ext, dt,
+    kx, kr, mx, mr, dx, dr,
+):
+    B, _ = pos.shape
+    device = pos.device
+
+    # task-space error
+    pos_err, aa_err = get_task_space_error(
+        pos, quat,
+        pos_g, quat_g,
+        jacobian_type="geometric", rot_error_type="axis_angle",
+    )
+    e = torch.cat((pos_err, aa_err), dim=1)  # (B,6)
+
+    # per-env scalars (B,)
+    def to_B(x):
+        x = torch.as_tensor(x, device=device, dtype=torch.float32)
+        return x.expand(B) if x.ndim == 0 else x
+
+    Kx = to_B(kx);  Kr = to_B(kr)
+    Mx = to_B(mx);  Mr = to_B(mr)
+    Dx = to_B(dx);  Dr = to_B(dr)
+
+    # build 6D vectors from (B,)
+    K = torch.stack([Kx, Kx, Kx, Kr, Kr, Kr], dim=1)    # (B,6)
+    D = torch.stack([Dx, Dx, Dx, Dr, Dr, Dr], dim=1)    # (B,6)
+    M = torch.stack([Mx, Mx, Mx, Mr, Mr, Mr], dim=1)    # (B,6)
+
+    # admittance update
+    F_sd  = K * e + D * v
+    vdot = (F_ext - F_sd) / M
+    v = v + dt * vdot
+
+    pos_cmd = pos + dt * v[:, :3]
+    angle = (v[:, 3:] * dt).norm(dim=1)                    # (N,)
+    axis  = (v[:, 3:] * dt) / (angle.unsqueeze(1) + 1e-8)  # (N, 3)
+    dq = quat_from_angle_axis(angle, axis)
+    quat_cmd = torch_utils.quat_mul(dq, quat)  # quaternion multiplication
+    quat_cmd = quat_cmd / quat_cmd.norm(dim=1, keepdim=True)  # normalize
+
+    return torch.cat((pos_cmd, quat_cmd), dim=1), v
