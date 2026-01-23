@@ -180,7 +180,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, list_repo_files
 
 def resolve_hf_path(
     repo_id: str,
