@@ -124,7 +124,6 @@ class FactoryEnvResidual(DirectRLEnv):
         self.serial_chain = pk.SerialChain(chain, "link7", "link_base")
         self.lim = torch.tensor(chain.get_joint_limits())[:, :7]
         self.abs_ik = pk.PseudoInverseIK(self.serial_chain, max_iterations=50, num_retries=1,
-            retry_configs=curr_qpos.to("cpu").to(torch.float32),
             joint_limits=self.lim.T,
             early_stopping_any_converged=True,
             early_stopping_no_improvement="all",
