@@ -27,7 +27,6 @@ from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 from .nn_buffer import NearestNeighborBuffer
 from .ring_buffer import LastKPoints
 import pytorch_kinematics as pk
-import sapien.core as sapien
 
 class FactoryEnvResidual(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -119,29 +118,11 @@ class FactoryEnvResidual(DirectRLEnv):
         self.lam = torch.tensor([self.cfg.ctrl.lam], device=self.device).repeat(self.num_envs) # (num_envs, )
 
         # abs ik for reset
-        robot_dir = factory_utils.resolve_robot_dir_materialized(self.cfg_task.hf_repo, cache_dir=os.path.expanduser("~/.cache/huggingface"))
-        urdf_path = str(Path(robot_dir) / "xarm7.urdf")
-
-        chain = pk.build_chain_from_urdf(open(urdf_path, mode="rb").read())
+        urdf = factory_utils.resolve_hf_file(self.cfg_task.hf_repo, "assets/robot/xarm7.urdf")
+        chain = pk.build_chain_from_urdf(open(urdf, mode="rb").read())
         # chain.print_tree()
         self.serial_chain = pk.SerialChain(chain, "link7", "link_base")
         self.lim = torch.tensor(chain.get_joint_limits())[:, :7]
-
-
-        # TODO: test sapien 
-        self.robot_name = "xarm7"
-
-        # load sapien robot
-        engine = sapien.Engine()            # create once
-        scene = engine.create_scene()
-        loader = scene.create_urdf_loader()
-        self.sapien_robot = loader.load(urdf_path)
-        self.robot_model = self.sapien_robot.create_pinocchio_model()
-        self.sapien_eef_idx = -1
-        for link_idx, link in enumerate(self.sapien_robot.get_links()):
-            if link.name == "link7":
-                self.sapien_eef_idx = link_idx
-                break
 
         # Held asset yaw rotation tracking (only for nut_thread task, only when task-engaged)
         if self.cfg_task.name == "nut_thread":
@@ -588,52 +569,6 @@ class FactoryEnvResidual(DirectRLEnv):
 
         return torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
 
-    def compute_fk_sapien_links(self, qpos, link_idx):
-        fk = self.robot_model.compute_forward_kinematics(qpos)
-        link_pose_ls = []
-        for i in link_idx:
-            link_pose_ls.append(self.robot_model.get_link_pose(i).to_transformation_matrix())
-        return link_pose_ls
-
-    def compute_ik_sapien(self, initial_qpos, tf, verbose=False):
-        """
-        Compute IK using sapien
-        initial_qpos: (N, ) numpy array
-        cartesian: (6, ) numpy array, x,y,z in meters, r,p,y in radians
-        """
-        # tf_mat = np.eye(4)
-        # tf_mat[:3, :3] = transforms3d.euler.euler2mat(ai=cartesian[3], aj=cartesian[4], ak=cartesian[5], axes='sxyz')
-        # tf_mat[:3, 3] = cartesian[0:3]
-        pose = sapien.Pose.from_transformation_matrix(tf)
-
-        if 'xarm7' in self.robot_name:
-            active_qmask = np.array([True, True, True, True, True, True, True])
-        qpos = self.robot_model.compute_inverse_kinematics(
-            link_index=self.sapien_eef_idx, 
-            pose=pose,
-            initial_qpos=initial_qpos, 
-            active_qmask=active_qmask, 
-            )
-        if verbose:
-            print('ik qpos:', qpos)
-
-        # verify ik
-        fk_pose = self.compute_fk_sapien_links(qpos[0], [self.sapien_eef_idx])[0]
-        
-        if verbose:
-            print('target pose for IK:', tf)
-            print('fk pose for IK:', fk_pose)
-        
-        pose_diff = np.linalg.norm(fk_pose[:3, 3] - tf[:3, 3])
-        rot_diff = np.linalg.norm(fk_pose[:3, :3] - tf[:3, :3])
-        
-        if pose_diff > 0.01 or rot_diff > 0.01:
-            print('ik pose diff:', pose_diff)
-            print('ik rot diff:', rot_diff)
-            import pdb; pdb.set_trace()
-            return initial_qpos
-        return qpos[0]
-
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -661,18 +596,7 @@ class FactoryEnvResidual(DirectRLEnv):
             kx=self.Kx,kr=self.Kr,mx=self.mx,mr=self.mr,dx=2.0*torch.sqrt(self.Kx * self.mx),dr=2.0*torch.sqrt(self.Kr * self.mr),
         )
 
-        self.qpos_targets = torch.zeros((self.num_envs, 7), device=self.device)
-        for i in range(self.num_envs):
-            curr_qpos = self.joint_pos[i, 0:7].cpu().numpy()
-            tf = np.eye(4)
-            tf[:3, :3] = torch_utils.quats_to_rot_matrices(cartesian_target[i, 3:7]).cpu().numpy()  
-            tf[:3, 3] = cartesian_target[i, :3].cpu().numpy()
-            ik_qpos = self.compute_ik_sapien(
-                initial_qpos=curr_qpos,
-                tf=tf,
-                verbose=False,
-            )
-            self.qpos_targets[i, 0:7] = torch.tensor(ik_qpos, device=self.device)
+        self.qpos_targets = self.compute_ik_abs(cartesian_target, self.joint_pos[:, 0:7])
 
     def _apply_action(self):
         """Apply actions for policy as delta targets from current position."""
