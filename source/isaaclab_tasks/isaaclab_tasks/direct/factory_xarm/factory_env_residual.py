@@ -119,7 +119,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.lam = torch.tensor([self.cfg.ctrl.lam], device=self.device).repeat(self.num_envs) # (num_envs, )
 
         # abs ik for reset
-        robot_dir = factory_utils.resolve_robot_assets_tree(self.cfg_task.hf_repo, cache_dir="/home/shuo/.cache")
+        robot_dir = factory_utils.resolve_robot_dir_materialized(self.cfg_task.hf_repo, cache_dir=os.path.expanduser("~/.cache/huggingface"))
         urdf_path = str(Path(robot_dir) / "xarm7.urdf")
 
         chain = pk.build_chain_from_urdf(open(urdf_path, mode="rb").read())

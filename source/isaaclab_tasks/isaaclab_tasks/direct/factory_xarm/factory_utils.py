@@ -176,8 +176,11 @@ def resolve_hf_file(repo_id: str, filename: str, repo_type = "dataset", revision
     )
     return str(Path(p))
 
+import os
+import shutil
+import tempfile
 from pathlib import Path
-from huggingface_hub import hf_hub_download, list_repo_files, snapshot_download
+from huggingface_hub import snapshot_download
 
 def resolve_hf_path(
     repo_id: str,
@@ -226,23 +229,32 @@ def resolve_hf_path(
 from pathlib import Path
 from huggingface_hub import snapshot_download
 
-def resolve_robot_assets_tree(repo_id: str, *, revision=None, cache_dir=None) -> str:
-    # Put a real directory tree somewhere stable (choose your own location)
-    local_dir = Path(cache_dir or "/tmp") / "hf_assets" / repo_id.replace("/", "__")
+def resolve_robot_dir_materialized(
+    repo_id: str,
+    robot_rel_dir: str = "assets/robot",
+    repo_type: str = "dataset",
+    revision: str | None = None,
+    cache_dir: str | None = None,
+) -> str:
+    robot_rel_dir = robot_rel_dir.strip("/")
+    prefix = robot_rel_dir + "/"
 
-    snapshot_root = snapshot_download(
+    snap_root = snapshot_download(
         repo_id=repo_id,
-        repo_type="dataset",
+        repo_type=repo_type,
         revision=revision,
-        local_dir=str(local_dir),
-        local_dir_use_symlinks=False,      # IMPORTANT: real files/dirs, not symlinks into blobs
-        allow_patterns=[
-            "assets/robot/**",
-            # If your repo stores meshes elsewhere, include that too:
-            "meshes/**",
-            "assets/meshes/**",
-        ],
+        cache_dir=cache_dir,
+        allow_patterns=[prefix + "**"],  # recursive
     )
 
-    robot_dir = Path(snapshot_root) / "assets/robot"
-    return str(robot_dir)
+    src = Path(snap_root) / robot_rel_dir
+    if not src.is_dir():
+        raise FileNotFoundError(f"Missing directory in snapshot: {src}")
+
+    # Stage to a real directory; copytree dereferences symlinks by default (symlinks=False)
+    stage_root = Path(tempfile.mkdtemp(prefix="robot_assets_"))
+    dst = stage_root / robot_rel_dir
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    shutil.copytree(src, dst, symlinks=False, dirs_exist_ok=True)
+    return str(dst)
