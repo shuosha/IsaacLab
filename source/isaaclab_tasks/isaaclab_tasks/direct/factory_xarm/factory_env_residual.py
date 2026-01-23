@@ -96,8 +96,6 @@ class FactoryEnvResidual(DirectRLEnv):
             )
             if self.cfg.env_options.base_model == "noisy_nn":
                 self.add_noise_to_base = True
-            else:
-                self.add_noise_to_base = False
 
         self.base_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
@@ -123,7 +121,7 @@ class FactoryEnvResidual(DirectRLEnv):
         # chain.print_tree()
         self.serial_chain = pk.SerialChain(chain, "link7", "link_base")
         self.lim = torch.tensor(chain.get_joint_limits())[:, :7]
-        self.abs_ik = pk.PseudoInverseIK(self.serial_chain, max_iterations=50, num_retries=1,
+        self.abs_ik = pk.PseudoInverseIK(self.serial_chain, max_iterations=30, num_retries=1,
             joint_limits=self.lim.T,
             early_stopping_any_converged=True,
             early_stopping_no_improvement="all",
@@ -152,6 +150,7 @@ class FactoryEnvResidual(DirectRLEnv):
 
         rob_tf = pk.Transform3d(matrix=tf.to("cpu"), dtype=action.dtype)
 
+        self.abs_ik.initial_config = curr_qpos.to("cpu").to(torch.float32)
         output = self.abs_ik.solve(rob_tf)
         converged = output.converged    # (G, R) bool
         solutions = output.solutions    # (G, R, DOF)
@@ -248,6 +247,8 @@ class FactoryEnvResidual(DirectRLEnv):
         
         self.starting_qpos = None
         self.curr_decimation = 0
+
+        self.add_noise_to_base = False
 
     def _setup_scene(self):
         """Initialize simulation scene."""

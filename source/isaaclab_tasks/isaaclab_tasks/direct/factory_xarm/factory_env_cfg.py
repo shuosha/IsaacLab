@@ -194,7 +194,7 @@ class CtrlCfg:
 
     Kx_dmr_range = [100, 300]
     Kr_dmr_range = [50, 125]
-    mx_dmr_range = [0.05, 0.15]
+    mx_dmr_range = [0.1, 0.15]
     mr_dmr_range = [0.01, 0.02]
     lam_dmr_range = [5e-3, 2e-2]
 
@@ -369,13 +369,13 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ), 
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={
-                "joint1": 0.035,
-                "joint2": -0.785, #-45
-                "joint3": 0.0,
-                "joint4": 0.523, # 30
-                "joint5": 0.0,
-                "joint6": 1.31, # 75
-                "joint7": 0.0,
+                "joint1": -0.06,
+                "joint2": -0.229, #-45
+                "joint3": 0.078,
+                "joint4": 0.688, # 30
+                "joint5": 0.03,
+                "joint6": 0.9, # 75
+                "joint7": -0.035,
                 "gripper": 0.0, # 0.0 to 1.7
                 "left_driver_joint": 0.0,
                 "left_inner_knuckle_joint": 0.0,
