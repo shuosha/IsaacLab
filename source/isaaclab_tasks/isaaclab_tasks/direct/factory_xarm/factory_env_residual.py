@@ -58,21 +58,20 @@ class FactoryEnvResidual(DirectRLEnv):
         ep_keys = sorted(data.keys())
         num_eps = len(ep_keys)
 
-        init = torch.empty((num_eps, 20), device=self.device, dtype=dtype)
+        init = torch.empty((num_eps, 13), device=self.device, dtype=dtype)
 
         for i, k in enumerate(ep_keys):
             ep = data[k]
 
             pos  = torch.as_tensor(ep["obs.fingertip_pos"][0], device=self.device, dtype=dtype)   # (3,)
             quat = torch.as_tensor(ep["obs.fingertip_quat"][0], device=self.device, dtype=dtype)  # (4,)
-            qpos = torch.as_tensor(ep["obs.qpos"][0], device=self.device, dtype=dtype)  # (7,)
 
             rel_fixed = torch.as_tensor(ep["obs.fingertip_pos_rel_fixed"][0], device=self.device, dtype=dtype)  # (3,)
             rel_held  = torch.as_tensor(ep["obs.fingertip_pos_rel_held"][0],  device=self.device, dtype=dtype)  # (3,)
             a = pos - rel_fixed  # (3,)
             b = pos - rel_held   # (3,)
 
-            init[i] = torch.cat([pos, quat, a, b, qpos], dim=0)  # (20,)
+            init[i] = torch.cat([pos, quat, a, b], dim=0)  # (13,)
 
         return init.unsqueeze(0).expand(self.num_envs, -1, -1)
 
@@ -104,7 +103,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.base_actions = torch.zeros((self.num_envs, 8), device=self.device)
 
         # initial states
-        self.initial_poses = self.build_init_state(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file)) # (num_envs, num_eps, 20)
+        self.initial_poses = self.build_init_state(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file)) # (num_envs, num_eps, 13)
         self.total_episodes: int = self.initial_poses.shape[1]
 
         if self.cfg.env_options.step_eps:
@@ -1076,7 +1075,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.xy_translation_noise[env_ids] = translation_noise
         self.yaw_rotation_noise[env_ids] = yaw_rotation_noise.unsqueeze(-1) # in local frame
 
-        held_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], 10:13] # (num_resets, 3)
+        held_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], -3:] # (num_resets, 3)
         held_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device).repeat(len(env_ids), 1)
 
         held_pos = torch_utils.tf_combine(
@@ -1103,7 +1102,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.cfg_task.name == "gear_mesh":
             fixed_tip_pos_local[:, 0] = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0] # type: ignore
 
-        fixed_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], 7:10]
+        fixed_pos = self.initial_poses[env_ids, self.episode_idx[env_ids], -6:-3]
         fixed_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=self.device).repeat(len(env_ids), 1)
 
         fixed_pos = torch_utils.tf_combine(
@@ -1134,7 +1133,7 @@ class FactoryEnvResidual(DirectRLEnv):
         )
         
         # reset robot
-        init_qpos = self.initial_poses[env_ids, self.episode_idx[env_ids], 13:20]
+        init_qpos = self._robot.data.default_joint_pos[env_ids, :7]
 
         # if self.cfg.env_options.data_aug:
         #     init_qpos_noise = None
