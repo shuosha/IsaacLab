@@ -172,7 +172,7 @@ class EnvOptionsCfg:
     task_success_reward_scale = 50.0
     termination_reward_scale = 20.0
     action_smoothing_reward_scale = 0.1
-    # xy_aligned_reward_scale = 0.05
+    xy_aligned_reward_scale = 0.05
     action_norm_reward_scale = 0.1
     tilt_penalty_reward_scale = 1.0
     force_penalty_reward_scale = 0.2
@@ -216,7 +216,7 @@ class CtrlCfg:
 
 @configclass
 class FactoryEnvCfg(DirectRLEnvCfg):
-    # is_finite_horizon=True
+    is_finite_horizon=True
     seed=0
 
     decimation = 8
