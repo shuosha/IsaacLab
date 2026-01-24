@@ -1015,7 +1015,7 @@ class FactoryEnvResidual(DirectRLEnv):
             rew_buf += rew_dict[rew_name]
 
         self.prev_actions = self.residual_actions.clone()
-        self._log_factory_metrics(rew_dict, first_success)
+        self._log_factory_metrics(rew_dict, self.first_success)
 
         if self.vis_options["rewards"] == True:
             try:
