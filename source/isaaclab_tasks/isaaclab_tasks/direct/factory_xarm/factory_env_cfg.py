@@ -138,11 +138,11 @@ class ObsRandCfg:
 class BaseActionRandCfg:
     horizon = [5, 15]
 
-    noise_smooth_alpha = 0.98
-    noise_gate_smooth_beta = 0.95
+    noise_smooth_alpha = 0.8
+    noise_gate_smooth_beta = 0.8
 
     base_action_noise_range = [-0.2, 0.2]
-    noise_on_prob = 0.25
+    noise_on_prob = 0.2
 
 @configclass
 class EnvOptionsCfg:
@@ -216,6 +216,9 @@ class CtrlCfg:
 
 @configclass
 class FactoryEnvCfg(DirectRLEnvCfg):
+    # is_finite_horizon=True
+    seed=0
+
     decimation = 8
     action_space = 6 # TODO: 7 for residual
     residual_action_space = 7
