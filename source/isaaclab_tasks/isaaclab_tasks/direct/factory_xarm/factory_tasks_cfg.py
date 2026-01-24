@@ -197,7 +197,7 @@ class PegInsert(FactoryTask):
         update_period=0.0,
         history_length=6,
         debug_vis=False,
-        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*", "/World/envs/env_.*/Table"],
+        filter_prim_paths_expr=["/World/envs/env_.*/robot/"],
     )
 
 
@@ -379,7 +379,7 @@ class GearMesh(FactoryTask):
         update_period=0.0,
         history_length=6,
         debug_vis=False,
-        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*", "/World/envs/env_.*/Table"],
+        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*"],
     )
 
 @configclass
@@ -518,6 +518,6 @@ class NutThread(FactoryTask):
         update_period=0.0,
         history_length=6,
         debug_vis=False,
-        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*", "/World/envs/env_.*/Table"],
+        filter_prim_paths_expr=["/World/envs/env_.*/robot/.*"],
     )
 

@@ -27,6 +27,7 @@ from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 from .nn_buffer import NearestNeighborBuffer
 from .ring_buffer import LastKPoints
 import pytorch_kinematics as pk
+import sapien.core as sapien
 
 class FactoryEnvResidual(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -113,11 +114,14 @@ class FactoryEnvResidual(DirectRLEnv):
         self.Kr = torch.tensor([self.cfg.ctrl.Kr], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mx = torch.tensor([self.cfg.ctrl.mx], device=self.device).repeat(self.num_envs) # (num_envs, )
         self.mr = torch.tensor([self.cfg.ctrl.mr], device=self.device).repeat(self.num_envs) # (num_envs, )
-        self.lam = torch.tensor([self.cfg.ctrl.lam], device=self.device).repeat(self.num_envs) # (num_envs, )
 
         # abs ik for reset
-        urdf = factory_utils.resolve_hf_file(self.cfg_task.hf_repo, "assets/robot/xarm7.urdf")
-        chain = pk.build_chain_from_urdf(open(urdf, mode="rb").read())
+        robot_dir = factory_utils.resolve_robot_dir_materialized(self.cfg_task.hf_repo, cache_dir=os.path.expanduser("~/.cache/huggingface"))
+        urdf_path = str(Path(robot_dir) / "xarm7.urdf")
+
+        chain = pk.build_chain_from_urdf(open(urdf_path, mode="rb").read())
+        # urdf = factory_utils.resolve_hf_file(self.cfg_task.hf_repo, "assets/robot/xarm7.urdf")
+        # chain = pk.build_chain_from_urdf(open(urdf, mode="rb").read())
         # chain.print_tree()
         self.serial_chain = pk.SerialChain(chain, "link7", "link_base")
         self.lim = torch.tensor(chain.get_joint_limits())[:, :7]
@@ -127,6 +131,21 @@ class FactoryEnvResidual(DirectRLEnv):
             early_stopping_no_improvement="all",
             debug=False,
             lr=0.2)
+
+        # TODO: test sapien 
+        self.robot_name = "xarm7"
+
+        # load sapien robot
+        engine = sapien.Engine()            # create once
+        scene = engine.create_scene()
+        loader = scene.create_urdf_loader()
+        self.sapien_robot = loader.load(urdf_path)
+        self.robot_model = self.sapien_robot.create_pinocchio_model()
+        self.sapien_eef_idx = -1
+        for link_idx, link in enumerate(self.sapien_robot.get_links()):
+            if link.name == "link7":
+                self.sapien_eef_idx = link_idx
+                break
 
         # Held asset yaw rotation tracking (only for nut_thread task, only when task-engaged)
         if self.cfg_task.name == "nut_thread":
@@ -564,9 +583,55 @@ class FactoryEnvResidual(DirectRLEnv):
         ctrl_target_fingertip_midpoint_quat = torch_utils.quat_mul(rot_actions_quat, base_actions[:, 3:7])
 
         grip_actions = residual_actions[:, 6:7] * self.gripper_threshold
-        ctrl_target_gripper_dof_pos = torch.clamp(base_actions[:, 7:8] + grip_actions, 0.0, 1.0) * 1.6
+        ctrl_target_gripper_dof_pos = torch.clamp(base_actions[:, 7:8] + grip_actions, 0.0, 1.0)
 
         return torch.cat([ctrl_target_fingertip_midpoint_pos, ctrl_target_fingertip_midpoint_quat, ctrl_target_gripper_dof_pos], dim=-1)
+
+    def compute_fk_sapien_links(self, qpos, link_idx):
+        fk = self.robot_model.compute_forward_kinematics(qpos)
+        link_pose_ls = []
+        for i in link_idx:
+            link_pose_ls.append(self.robot_model.get_link_pose(i).to_transformation_matrix())
+        return link_pose_ls
+
+    def compute_ik_sapien(self, initial_qpos, tf, verbose=False):
+        """
+        Compute IK using sapien
+        initial_qpos: (N, ) numpy array
+        cartesian: (6, ) numpy array, x,y,z in meters, r,p,y in radians
+        """
+        # tf_mat = np.eye(4)
+        # tf_mat[:3, :3] = transforms3d.euler.euler2mat(ai=cartesian[3], aj=cartesian[4], ak=cartesian[5], axes='sxyz')
+        # tf_mat[:3, 3] = cartesian[0:3]
+        pose = sapien.Pose.from_transformation_matrix(tf)
+
+        if 'xarm7' in self.robot_name:
+            active_qmask = np.array([True, True, True, True, True, True, True])
+        qpos = self.robot_model.compute_inverse_kinematics(
+            link_index=self.sapien_eef_idx, 
+            pose=pose,
+            initial_qpos=initial_qpos, 
+            active_qmask=active_qmask, 
+            )
+        if verbose:
+            print('ik qpos:', qpos)
+
+        # verify ik
+        fk_pose = self.compute_fk_sapien_links(qpos[0], [self.sapien_eef_idx])[0]
+        
+        if verbose:
+            print('target pose for IK:', tf)
+            print('fk pose for IK:', fk_pose)
+        
+        pose_diff = np.linalg.norm(fk_pose[:3, 3] - tf[:3, 3])
+        rot_diff = np.linalg.norm(fk_pose[:3, :3] - tf[:3, :3])
+        
+        if pose_diff > 0.01 or rot_diff > 0.01:
+            print('ik pose diff:', pose_diff)
+            print('ik rot diff:', rot_diff)
+            import pdb; pdb.set_trace()
+            return initial_qpos
+        return qpos[0]
 
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
@@ -592,10 +657,24 @@ class FactoryEnvResidual(DirectRLEnv):
             pos=self.eef_pos, quat=self.fingertip_midpoint_quat,
             pos_g=ctrl_target_eef_pos, quat_g=ctrl_target_fingertip_midpoint_quat,
             v=self.task_velocities, F_ext=self.F_ext, dt=self.physics_dt,
-            kx=self.Kx,kr=self.Kr,mx=self.mx,mr=self.mr,dx=2.0*torch.sqrt(self.Kx * self.mx),dr=2.0*torch.sqrt(self.Kr * self.mr),
+            kx=self.Kx,kr=self.Kr,mx=self.mx,mr=self.mr,dx=1.*torch.sqrt(self.Kx * self.mx),dr=1.*torch.sqrt(self.Kr * self.mr),
         )
 
-        self.qpos_targets = self.compute_ik_abs(cartesian_target, self.joint_pos[:, 0:7])
+        if self.cfg.ctrl.ik == "pk":
+            self.qpos_targets = self.compute_ik_abs(cartesian_target, self.joint_pos[:, 0:7])
+        elif self.cfg.ctrl.ik == "sapien":
+            self.qpos_targets = torch.zeros((self.num_envs, 7), device=self.device)
+            for i in range(self.num_envs):
+                curr_qpos = self.joint_pos[i, 0:7].cpu().numpy()
+                tf = np.eye(4)
+                tf[:3, :3] = torch_utils.quats_to_rot_matrices(cartesian_target[i, 3:7]).cpu().numpy()  
+                tf[:3, 3] = cartesian_target[i, :3].cpu().numpy()
+                ik_qpos = self.compute_ik_sapien(
+                    initial_qpos=curr_qpos,
+                    tf=tf,
+                    verbose=False,
+                )
+                self.qpos_targets[i, 0:7] = torch.tensor(ik_qpos, device=self.device)
 
     def _apply_action(self):
         """Apply actions for policy as delta targets from current position."""
@@ -604,7 +683,7 @@ class FactoryEnvResidual(DirectRLEnv):
         if self.last_update_timestamp < self._robot._data._sim_timestamp:
             self._compute_intermediate_values(dt=self.physics_dt)
 
-        ctrl_target_gripper_dof_pos = self.env_actions[:, 7:8].clone()
+        ctrl_target_gripper_dof_pos = self.env_actions[:, 7:8].clone() * 1.6
 
         if self.cfg_task.name == "gear_mesh":
             ctrl_target_gripper_dof_pos = torch.clamp(ctrl_target_gripper_dof_pos, max=1.2)
@@ -877,7 +956,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
             "action_smoothing": -action_smoothing * self.cfg.env_options.action_smoothing_reward_scale,
-            "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
+            # "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
             "terminated": torch.clamp(first_success.float() - self.reset_terminated.float(), max=0.0) * self.cfg.env_options.termination_reward_scale,
             "task_success": first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
@@ -968,7 +1047,6 @@ class FactoryEnvResidual(DirectRLEnv):
             self.Kr[env_ids] = self.cfg.ctrl.Kr_dmr_range[0] + (self.cfg.ctrl.Kr_dmr_range[1] - self.cfg.ctrl.Kr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
             self.mx[env_ids] = self.cfg.ctrl.mx_dmr_range[0] + (self.cfg.ctrl.mx_dmr_range[1] - self.cfg.ctrl.mx_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
             self.mr[env_ids] = self.cfg.ctrl.mr_dmr_range[0] + (self.cfg.ctrl.mr_dmr_range[1] - self.cfg.ctrl.mr_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
-            self.lam[env_ids] = self.cfg.ctrl.lam_dmr_range[0] + (self.cfg.ctrl.lam_dmr_range[1] - self.cfg.ctrl.lam_dmr_range[0]) * torch.rand(len(env_ids), device=self.device)
         self.task_velocities[env_ids] = 0.0
 
         # move to next episode

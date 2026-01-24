@@ -172,13 +172,14 @@ class EnvOptionsCfg:
     task_success_reward_scale = 50.0
     termination_reward_scale = 20.0
     action_smoothing_reward_scale = 0.1
-    xy_aligned_reward_scale = 0.05
+    # xy_aligned_reward_scale = 0.05
     action_norm_reward_scale = 0.1
     tilt_penalty_reward_scale = 1.0
     force_penalty_reward_scale = 0.2
 
 @configclass
 class CtrlCfg:
+    ik = "sapien" # or pk
     ema_factor = 0.2
 
     pos_action_bounds = [0.05, 0.05, 0.05]
@@ -192,11 +193,10 @@ class CtrlCfg:
     res_rot_action_threshold = [0.5, 0.5, 0.5] # 30 deg
     res_gripper_action_threshold = [0.5] # half open close
 
-    Kx_dmr_range = [100, 300]
-    Kr_dmr_range = [50, 125]
-    mx_dmr_range = [0.1, 0.15]
-    mr_dmr_range = [0.01, 0.02]
-    lam_dmr_range = [5e-3, 2e-2]
+    Kx_dmr_range = [190, 210]
+    Kr_dmr_range = [95, 105] # 150 is problem
+    mx_dmr_range = [0.11875, 0.13125]
+    mr_dmr_range = [0.01425, 0.01575]
 
     reset_joints = [0.035, -0.323, 0.0, 0.523, 0.0, 1.31, 0.0]
     reset_task_prop_gains = [300, 300, 300, 20, 20, 20]
@@ -209,12 +209,10 @@ class CtrlCfg:
     kd_null = 6.3246
 
     # Admittance control parameters
-    Kx = 150.0
+    Kx = 200.0
     Kr = 100.0
-    mx = 0.1
+    mx = 0.125
     mr = 0.015
-    lam = 1e-2
-    rot_scale = 1.25
 
 @configclass
 class FactoryEnvCfg(DirectRLEnvCfg):
