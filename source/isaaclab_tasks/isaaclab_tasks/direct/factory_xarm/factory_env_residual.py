@@ -557,6 +557,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.ep_succeeded[env_ids] = 0
         self.ep_success_times[env_ids] = 0
         self.eps_task_succeeded[env_ids] = 0
+        self.first_success[env_ids] = 0
 
     def _apply_residual(self, residual_actions, base_actions):
         # Interpret actions as target pos displacements and set pos target
@@ -746,6 +747,10 @@ class FactoryEnvResidual(DirectRLEnv):
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1 
 
+        task_success = self._check_success()
+        self.first_success = task_success & (~self.eps_task_succeeded.to(torch.bool))
+        self.eps_task_succeeded[task_success] = 1
+
         if self.cfg.env_options.step_eps:
             dist_threshold = 0.2
             terminated = torch.norm(self.fingertip_midpoint_pos - self.held_pos_obs_frame, dim=1) > dist_threshold # to eliminate the case where held asset falls far away
@@ -764,6 +769,9 @@ class FactoryEnvResidual(DirectRLEnv):
                 on_ground = self.held_pos[:, 2] < 0.02
                 dropped = torch.logical_and(on_ground, self.picked_up)
                 terminated |= dropped
+
+            assert not (self.first_success & (~terminated)).any()
+
         else:
             terminated = time_out.clone()
 
@@ -848,9 +856,7 @@ class FactoryEnvResidual(DirectRLEnv):
         for rew_name, rew in rew_dict.items():
             self.extras[f"logs_rew_{rew_name}"] = rew.mean()
 
-    def _get_rewards(self):
-        """Compute dense shaping + terminal reward + diagnostics."""
-
+    def _check_success(self):
         # -------------------------
         # Base success (task-specific threshold)
         # -------------------------
@@ -877,10 +883,7 @@ class FactoryEnvResidual(DirectRLEnv):
         # -------------------------
         xy_dist_held_fixed = torch.linalg.vector_norm(target_pos[:, :2] - held_pos[:, :2], dim=1)          # (N,)
         xy_dist_eef_held = torch.linalg.vector_norm(self.fingertip_midpoint_pos[:, :2] - held_pos[:, :2], dim=1)  # (N,)
-        z_disp  = (held_pos[:, 2] - target_pos[:, 2])                            # (N,)
-
-        xy_align_thresh  = 0.005
-        xy_aligned  = (xy_dist_held_fixed < xy_align_thresh).float() + (xy_dist_eef_held < xy_align_thresh).float()
+        z_disp  = (held_pos[:, 2] - target_pos[:, 2]) 
 
         # -------------------------
         # nut_thread: track accumulated rotation ONLY when precondition holds AND gripper closed
@@ -916,7 +919,35 @@ class FactoryEnvResidual(DirectRLEnv):
             # override task success: need >= target rotation
             rot_target_deg = 180.0  # change to 360.0 if you actually want a full turn
             task_success = (self.cumulative_rotation >= rot_target_deg)
+        
+        return task_success
 
+    def _get_rewards(self):
+        """Compute dense shaping + terminal reward + diagnostics."""
+        # -------------------------
+        # Held pose + target pose (task frame)
+        # -------------------------
+        held_pos, held_quat = factory_utils.get_held_base_pose(
+            self.held_pos, self.held_quat,
+            self.cfg_task.name, self.cfg_task.fixed_asset_cfg,
+            self.num_envs, self.device
+        )
+        target_pos, target_quat = factory_utils.get_target_held_base_pose(
+            self.fixed_pos, self.fixed_quat,
+            self.cfg_task.name, self.cfg_task.fixed_asset_cfg,
+            self.num_envs, self.device
+        )
+
+        # -------------------------
+        # XY alignment shaping + (optional) precondition for nut_thread
+        # -------------------------
+        xy_dist_held_fixed = torch.linalg.vector_norm(target_pos[:, :2] - held_pos[:, :2], dim=1)          # (N,)
+        xy_dist_eef_held = torch.linalg.vector_norm(self.fingertip_midpoint_pos[:, :2] - held_pos[:, :2], dim=1)  # (N,)
+        z_disp  = (held_pos[:, 2] - target_pos[:, 2])                            # (N,)
+
+        xy_align_thresh  = 0.005
+        xy_aligned  = (xy_dist_held_fixed < xy_align_thresh).float() + (xy_dist_eef_held < xy_align_thresh).float()
+        
         # -------------------------
         # Tilt penalty (high priority)
         # -------------------------
@@ -944,21 +975,14 @@ class FactoryEnvResidual(DirectRLEnv):
         # -------------------------
         action_smoothing = torch.norm(self.prev_actions - self.residual_actions, dim=1)
 
-        # -------------------------
-        # Terminal shaping + “first success only” bookkeeping
-        # -------------------------
-        # If you still want "pay once when first succeeded this episode":
-        first_success = task_success & (~self.eps_task_succeeded.to(torch.bool))
-        self.eps_task_succeeded[task_success] = 1
-
         rew_dict = {
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
             "action_smoothing": -action_smoothing * self.cfg.env_options.action_smoothing_reward_scale,
             "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
-            "terminated": torch.clamp(first_success.float() - self.reset_terminated.float(), max=0.0) * self.cfg.env_options.termination_reward_scale,
-            "task_success": first_success.float() * self.cfg.env_options.task_success_reward_scale,
+            "terminated": (self.reset_terminated & (~self.eps_task_succeeded)).float() * self.cfg.env_options.termination_reward_scale,
+            "task_success": self.first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
 
