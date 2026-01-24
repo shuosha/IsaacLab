@@ -981,7 +981,7 @@ class FactoryEnvResidual(DirectRLEnv):
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
             "action_smoothing": -action_smoothing * self.cfg.env_options.action_smoothing_reward_scale,
             "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
-            "terminated": (self.reset_terminated & (~self.eps_task_succeeded)).float() * self.cfg.env_options.termination_reward_scale,
+            "terminated": -(self.reset_terminated & (~self.eps_task_succeeded)).float() * self.cfg.env_options.termination_reward_scale,
             "task_success": self.first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
