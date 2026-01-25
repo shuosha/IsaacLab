@@ -973,13 +973,21 @@ class FactoryEnvResidual(DirectRLEnv):
         # -------------------------
         action_smoothing = torch.norm(self.prev_actions - self.residual_actions, dim=1)
 
+        # survival
+        survival = torch.ones_like(action_norm)
+        fail_term = self.reset_terminated & (~self.eps_task_succeeded)
+        remaining = (self.max_episode_length - self.episode_length_buf).float().clamp(min=0.0)
+
+        survival = survival - remaining * fail_term.float()
+
         rew_dict = {
             "action_norm": -action_norm * self.cfg.env_options.action_norm_reward_scale,
             "tilt_penalty": -tilt_penalty * self.cfg.env_options.tilt_penalty_reward_scale,
             "force_penalty": -force_penalty * self.cfg.env_options.force_penalty_reward_scale,
             "action_smoothing": -action_smoothing * self.cfg.env_options.action_smoothing_reward_scale,
             "xy_align": xy_aligned.float() * self.cfg.env_options.xy_aligned_reward_scale,
-            "terminated": -(self.reset_terminated & (~self.eps_task_succeeded)).float() * self.cfg.env_options.termination_reward_scale,
+            "survival": survival * self.cfg.env_options.survival_reward_scale,
+            # "terminated": -(self.reset_terminated & (~self.eps_task_succeeded)).float() * self.cfg.env_options.termination_reward_scale,
             "task_success": self.first_success.float() * self.cfg.env_options.task_success_reward_scale,
         }
         rew_buf = torch.zeros_like(rew_dict["task_success"])
