@@ -169,12 +169,12 @@ class EnvOptionsCfg:
     }
     teleop_mode = False
 
-    task_success_reward_scale = 50.0
-    termination_reward_scale = 20.0
-    action_smoothing_reward_scale = 0.1
+    task_success_reward_scale = 200.0
+    termination_reward_scale = 50.0
+    action_smoothing_reward_scale = 0.02
     xy_aligned_reward_scale = 0.05
     action_norm_reward_scale = 0.1
-    tilt_penalty_reward_scale = 1.0
+    tilt_penalty_reward_scale = 2.0
     force_penalty_reward_scale = 0.2
 
 @configclass
@@ -189,9 +189,9 @@ class CtrlCfg:
     rot_action_threshold = [0.097, 0.097, 0.097]
     gripper_action_threshold = [0.1]
 
-    res_pos_action_threshold = [0.03, 0.03, 0.03] # 3 cm
-    res_rot_action_threshold = [0.5, 0.5, 0.5] # 30 deg
-    res_gripper_action_threshold = [0.5] # half open close
+    res_pos_action_threshold = [0.05, 0.05, 0.05] # 3 cm
+    res_rot_action_threshold = [1.05, 1.05, 1.05] # 30 deg
+    res_gripper_action_threshold = [0.1] # half open close
 
     Kx_dmr_range = [190, 210]
     Kr_dmr_range = [95, 105] # 150 is problem

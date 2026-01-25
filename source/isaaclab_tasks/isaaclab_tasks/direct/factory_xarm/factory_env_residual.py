@@ -189,7 +189,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.rot_threshold = torch.tensor(self.cfg.ctrl.res_rot_action_threshold, device=self.device).repeat(
             (self.num_envs, 1)
         )
-        self.gripper_threshold = torch.tensor(self.cfg.ctrl.gripper_action_threshold, device=self.device).repeat(
+        self.gripper_threshold = torch.tensor(self.cfg.ctrl.res_gripper_action_threshold, device=self.device).repeat(
             (self.num_envs, 1)
         )
 
