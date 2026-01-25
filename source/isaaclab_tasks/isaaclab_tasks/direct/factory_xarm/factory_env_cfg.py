@@ -168,7 +168,7 @@ class EnvOptionsCfg:
     }
     teleop_mode = False
 
-    task_success_reward_scale = 50.0
+    task_success_reward_scale = 30.0
     termination_reward_scale = 50.0
     action_smoothing_reward_scale = 0.1
     xy_aligned_reward_scale = 0.05
