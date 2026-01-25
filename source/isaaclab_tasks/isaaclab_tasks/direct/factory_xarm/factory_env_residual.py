@@ -260,7 +260,6 @@ class FactoryEnvResidual(DirectRLEnv):
 
         self.rew_sum = None
 
-        self.base_noise_state = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         self.noise_gate = torch.zeros(self.num_envs, 1, device=self.device)
         self.noise_amp  = torch.zeros(self.num_envs, 1, device=self.device)
         
@@ -462,23 +461,22 @@ class FactoryEnvResidual(DirectRLEnv):
         N, d = self.num_envs, self.cfg.action_space
         dev = self.device
 
-        # --- (1) Smooth noise process n_t (low-pass filtered uniform) ---
-        alpha = self.cfg.base_rand.noise_smooth_alpha          # e.g. 0.98-0.995
         lo, hi = self.cfg.base_rand.base_action_noise_range
+        p_on   = self.cfg.base_rand.noise_on_prob
+        beta   = self.cfg.base_rand.noise_gate_smooth_beta  # closer to 1 => smoother/slower
 
+        # (1) i.i.d. noise each step
         eps = torch.empty(N, d, device=dev).uniform_(lo, hi)
-        eps[:, -1] = 0.0  # no noise on gripper
-        self.base_noise_state = alpha * self.base_noise_state + (1.0 - alpha) * eps
+        eps[:, -1] = 0.0
 
-        # --- (2) Smooth per-step "noisy?" gate g_t in [0,1] ---
-        p_on = self.cfg.base_rand.noise_on_prob                # noise probability per step
+        # (2) Bernoulli target each step (noise "requested" on/off)
         g_tgt = (torch.rand(N, 1, device=dev) < p_on).float()
 
-        beta_g = self.cfg.base_rand.noise_gate_smooth_beta     # e.g. 0.95-0.995
-        self.noise_gate = beta_g * self.noise_gate + (1.0 - beta_g) * g_tgt
+        # (3) smooth envelope (fade in/out)
+        self.noise_gate = beta * self.noise_gate + (1.0 - beta) * g_tgt
 
-        # --- Apply ---
-        noise = self.base_noise_state * self.noise_gate
+        # apply
+        noise = self.noise_gate * eps
         self.base_actions = self._apply_residual(noise, self.base_actions)
 
     def _get_factory_obs_state_dict(self):
@@ -1193,7 +1191,6 @@ class FactoryEnvResidual(DirectRLEnv):
             self.base_policy.clear(env_ids)
         
         if self.add_noise_to_base:
-            self.base_noise_state[env_ids] = 0.0
             self.noise_gate[env_ids] = 0.0
 
         _, fixed_tip_pos = torch_utils.tf_combine(
