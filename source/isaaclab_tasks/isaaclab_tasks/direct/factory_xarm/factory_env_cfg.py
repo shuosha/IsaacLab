@@ -172,7 +172,7 @@ class EnvOptionsCfg:
     termination_reward_scale = 50.0
     action_smoothing_reward_scale = 0.1
     xy_aligned_reward_scale = 0.05
-    action_norm_reward_scale = 0.1
+    action_norm_reward_scale = 0.3
     tilt_penalty_reward_scale = 1.0
     force_penalty_reward_scale = 0.2
 
