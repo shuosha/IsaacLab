@@ -38,7 +38,7 @@ parser.add_argument("--num_episodes", type=int, required=True)
 # image saving control: default ON; provide --no_images to disable
 parser.add_argument("--no_images", dest="save_images", action="store_false", help="Disable saving images (only save states for successful episodes)")
 parser.set_defaults(save_images=True)
-parser.add_argument("--base", choices=["nn", "bc"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
+parser.add_argument("--base", choices=["nn", "bc", "noisy_nn"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
 
 # launch args
 AppLauncher.add_app_launcher_args(parser)
@@ -386,7 +386,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if args_cli.enable_cameras:
                 img_tensor = env_unwrapped.front_rgb          # (N, H, W, 3) uint8
             env_actions_tensor = env_unwrapped.env_actions  # (N, A)
-            success_tensor = env_unwrapped.ep_succeeded    # (N,) bool/0-1
+            success_tensor = env_unwrapped.eps_task_succeeded    # (N,) bool/0-1
 
             obs_np_all = obs[:, :20].detach().cpu().numpy() # exclude base action and prev residual action
             act_np_all = env_actions_tensor.detach().cpu().numpy()
