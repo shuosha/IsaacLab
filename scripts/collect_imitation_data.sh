@@ -9,7 +9,7 @@ fi
 task="$1"
 ckpt_path="$2"
 output_dir="$3"
-base="${4:-nn}" # default to nn if not provided
+base="${4:-noisy_nn}" # default to nn if not provided
 num_eps=2000
 num_envs=100   # default to 1 if not provided
 python scripts/reinforcement_learning/rl_games/collect_imitation_data.py \

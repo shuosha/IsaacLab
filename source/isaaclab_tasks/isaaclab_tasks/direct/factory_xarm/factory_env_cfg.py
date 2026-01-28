@@ -91,14 +91,14 @@ FRONT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
 
 LEFT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
     intrinsic_matrix=FRONT_INTR,
-    height=200,
-    width=200,
+    height=480,
+    width=848,
 )
 
 RIGHT_PINHOLE_CFG = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
     intrinsic_matrix=FRONT_INTR,
-    height=200,
-    width=200,
+    height=480,
+    width=848,
 )
 
 # FRONT_PINHOLE_CFG.horizontal_aperture_offset = -0.04
@@ -111,15 +111,15 @@ R_front2base = front2base[:3, :3]
 q_front2base = quat_from_matrix(torch.from_numpy(R_front2base)).tolist() # wxyz
 t_front2base = front2base[:3, 3].tolist()
 
-t_left2base = [0.515, 0.15, 0.13]
-q_left2base = [0.273, 0.238, 0.416, 0.834]
+t_left2base = [0.48, -0.07, 0.11]
+q_left2base = [0.594, 0.408, 0.366, 0.588]
 m_left2base = matrix_from_quat(torch.tensor(q_left2base)).numpy()
 left2base = np.eye(4)
 left2base[:3, :3] = m_left2base
 left2base[:3, 3] = t_left2base
 
-t_right2base = [0.47, -0.26, 0.035]
-q_right2base = [0.668, 0.686, 0.194, 0.212]
+t_right2base = [0.5, -0.1, 0.12]
+q_right2base = [0.677, 0.52, 0.296, 0.428]
 m_right2base = matrix_from_quat(torch.tensor(q_right2base)).numpy()
 right2base = np.eye(4)
 right2base[:3, :3] = m_right2base
@@ -143,12 +143,14 @@ class BaseActionRandCfg:
     base_action_noise_range = [-0.4, 0.4]
     noise_on_prob = 0.5
 
+    lag_on_prob = 0.5
+
 @configclass
 class EnvOptionsCfg:
     measure_force = True
     enable_cameras = False
 
-    base_model = "nn" # nn / bc
+    base_model = "noisy_nn" # noisy_nn / nn / bc_teleop / bc_expert / laggy_bc_expert / noisy_bc_expert
 
     ctrl_dmr = True
     obs_dmr = True
@@ -431,8 +433,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     right_camera_cfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/right_camera",
         offset=TiledCameraCfg.OffsetCfg(pos=t_right2base, rot=q_right2base, convention="opengl"), # z-down; x-forward # greater angle = towards gripper
-        height=200,
-        width=200,
+        height=480,
+        width=848,
         data_types=[
             "rgb",
             # "distance_to_image_plane",
@@ -443,8 +445,8 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     left_camera_cfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/left_camera",
         offset=TiledCameraCfg.OffsetCfg(pos=t_left2base, rot=q_left2base, convention="opengl"), # z-down; x-forward # greater angle = towards gripper
-        height=200,
-        width=200,
+        height=480,
+        width=848,
         data_types=[
             "rgb",
             # "distance_to_image_plane",

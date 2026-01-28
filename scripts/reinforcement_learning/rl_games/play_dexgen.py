@@ -10,6 +10,8 @@
 import argparse
 import sys
 import cv2
+import json
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -27,6 +29,10 @@ parser.add_argument(
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--base", choices=["noisy_nn", "nn", "bc_teleop", "bc_expert", "laggy_bc_expert", "noisy_bc_expert"], default=None, help="Base model type: nn (neural network) or bc (behavior cloning).")
+parser.add_argument("--eval_episodes", type=int, default=200, help="Number of evaluation episodes.")
+parser.add_argument("--log_path", type=str, default=None, help="Path to save evaluation logs.")
+
 parser.add_argument("--policy_path", type=str, required=True, help="Path to the trained policy checkpoint.")
 parser.add_argument("--imitation_only", action="store_true", default=False, help="Use imitation only policy.")
 # append AppLauncher cli args
@@ -106,13 +112,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.env_options.vis_options = {
-        "action_goals": True,      # red, blue, green triangle
+        "action_goals": False,      # red, blue, green triangle
         "training_data": False,     # yellow + purple
         "rewards": False,           # pink circles/shapes
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
-        "eval_mode": False,         # cyan tint
     }
+    assert args_cli.base is not None, "Base model type must be specified."
+    env_cfg.env_options.base_model = args_cli.base
+    env_cfg.env_options.ctrl_dmr = True
+    env_cfg.env_options.obs_dmr = True
+    env_cfg.env_options.data_aug = True
+    env_cfg.env_options.step_eps = True
+    env_cfg.env_options.offline_base = False
+    # env_cfg.env_options.measure_force = True
+    # env_cfg.env_options.enable_cameras = True
     env_cfg.env_options.verbose = False
 
     # randomly sample a seed if seed = -1
@@ -179,48 +193,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     imitation_only = args_cli.imitation_only
     tot_eps = 0
     tot_suc = 0
-    tot_timeout = 0
-    tot_dist_term = 0
-    tot_task_term = 0
-    terminal_eps = 500
+    tot_rew = 0.0
+    terminal_eps = args_cli.eval_episodes
     pbar = tqdm(total=terminal_eps, desc="Rollouts", unit="ep")
-    
     timestep = 0
+    ep_return = torch.zeros(env.unwrapped.num_envs, dtype=torch.float32, device=env.device)
+
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
     #   operations such as masking that is used for multi-agent learning by RL-Games.
-    while simulation_app.is_running() and tot_eps < terminal_eps:
+    while simulation_app.is_running():
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
-            # env stepping
-            obs, _, dones, infos = env.step(actions)
-            if isinstance(obs, dict):
-                obs = obs["obs"]
-
-            if dones.any():
-                policy.reset()
-
-            tot_eps += infos["EVAL_eps_done"]
-            tot_suc += infos["EVAL_success"]
-            tot_timeout += infos["EVAL_time_out"]
-            tot_dist_term += infos["EVAL_dist_term"]
-            tot_task_term += infos["EVAL_task_term"]
-
-            # update progress toward terminal_eps using env-reported episode completions
-            eps_done = int(infos.get("EVAL_eps_done", 0))
-            if eps_done > 0:
-                update_val = min(eps_done, max(0, terminal_eps - pbar.n))
-                if update_val > 0:
-                    pbar.update(update_val)
-                # print totals after each progress update
-                print(
-                    f"[EVAL] eps: {tot_eps}/{terminal_eps} \n " +
-                    f" sr {tot_suc/tot_eps:.3f} | success: {tot_suc} | time_out: {tot_timeout} | dist_term: {tot_dist_term} | task_term: {tot_task_term}"
-                )
-
-            # base actions
+                        # base actions
             base_actions = env.unwrapped.base_actions
 
             # convert obs to agent format
@@ -229,7 +216,32 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 actions = policy.act(obs_lerobot)
             else:
                 actions = policy.act(obs_lerobot, ref_action=base_actions)
-        
+            # env stepping
+            obs, rew, dones, _ = env.step(actions)
+            if isinstance(obs, dict):
+                obs = obs["obs"]
+            ep_return += rew # (num_envs, )
+            if dones.any():
+                policy.reset()
+                completed = dones.sum().item()
+                succeeded = env.unwrapped.eps_task_succeeded[dones].sum().item()
+                rew = ep_return[dones].cpu().numpy()
+                ep_return[dones] = 0.0
+
+                tot_eps += completed
+                tot_suc += succeeded
+                tot_rew += rew.sum()
+
+                update_val = min(completed, max(0, terminal_eps - pbar.n))
+                if update_val > 0:
+                    pbar.update(update_val)
+
+                success_rate = tot_suc / tot_eps if tot_eps > 0 else 0.0
+                pbar.set_postfix({"success_rate": f"{success_rate:.3f}"})
+
+            if tot_eps >= terminal_eps:
+                print("final success rate:", tot_suc / tot_eps)
+                break
         if args_cli.video:
             timestep += 1
             # exit the play loop after recording one video
@@ -244,6 +256,41 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     pbar.close()
     # close the simulator
     env.close()
+
+    if args_cli.log_path is not None:
+        out_dict = {}
+
+        # ensure directory exists
+        os.makedirs(os.path.dirname(args_cli.log_path), exist_ok=True)
+
+        # Load existing JSON if possible
+        if os.path.exists(args_cli.log_path):
+            try:
+                with open(args_cli.log_path, "r") as f:
+                    content = f.read().strip()
+                    out_dict = json.loads(content) if content else {}
+            except json.JSONDecodeError:
+                # File exists but is empty or corrupted/truncated
+                print(f"[WARN] log_path not valid JSON (starting fresh): {args_cli.log_path}")
+                out_dict = {}
+        
+        name = Path(args_cli.policy_path).name # GearMesh_bc_expert
+        parts = name.split("_")
+        task_name = parts[0]
+        train_base = "_".join(parts[1:])   # "bc_teleop"
+        eval_base = f"{args_cli.base}"
+        ckpt_name = f"diffusion_t:{train_base}_e:{eval_base}"
+        
+        out_dict.setdefault(task_name, {})
+        out_dict[task_name][ckpt_name] = {
+            "eval_episodes": int(terminal_eps),
+            "success_rate": float(tot_suc / tot_eps) if tot_eps > 0 else 0.0,
+            "mean_eps_return": float(tot_rew / tot_eps) if tot_eps > 0 else 0.0,
+            "base_model": args_cli.base,
+        }
+
+        with open(args_cli.log_path, "w") as f:
+            json.dump(out_dict, f, indent=2)
 
 
 if __name__ == "__main__":

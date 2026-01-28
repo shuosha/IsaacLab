@@ -107,7 +107,8 @@ class Hole8mm(FixedAssetCfg):
 @configclass
 class PegInsert(FactoryTask):
     train_data_hf_file: str = "data/peginsert_train_data.npy"
-    diffusion_path: str = "models/bc_teleop/peginsert_bc_teleop_c40k_b256"
+    dp_teleop: str = "models/bc_teleop/PegInsert_bc_teleop"
+    dp_expert: str = "models/bc_expert/PegInsert_bc_expert"
 
     close_gripper: float = 0.93
     
@@ -222,7 +223,8 @@ class MediumGear(HeldAssetCfg):
 @configclass
 class GearMesh(FactoryTask):
     train_data_hf_file: str = "data/gearmesh_train_data.npy"
-    diffusion_path: str = "models/bc_teleop/gearmesh_bc_teleop_c40k_b256"    
+    dp_teleop: str = "models/bc_teleop/GearMesh_bc_teleop"    
+    dp_expert: str = "models/bc_expert/GearMesh_bc_expert"
 
     close_gripper: float = 0.69
     name = "gear_mesh"
@@ -426,7 +428,8 @@ class NutThread(FactoryTask):
     name = "nut_thread"
 
     train_data_hf_file: str = "data/nutthread_train_data.npy"
-    diffusion_path: str = "models/bc_teleop/nutthread_bc_teleop_c40k_b256"
+    dp_teleop: str = "models/bc_teleop/NutThread_bc_teleop"
+    dp_expert: str = "models/bc_expert/NutThread_bc_expert"
     close_gripper: float = 0.39
     
     fixed_asset_cfg = BoltM32()

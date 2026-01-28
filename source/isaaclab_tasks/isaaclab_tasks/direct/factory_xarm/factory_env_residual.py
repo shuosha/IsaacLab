@@ -82,10 +82,19 @@ class FactoryEnvResidual(DirectRLEnv):
         self.vis_options = self.cfg.env_options.vis_options
 
         # base policy
-        if self.cfg.env_options.base_model == "bc":
+        if self.cfg.env_options.base_model in ["bc_teleop", "bc_expert", "laggy_bc_expert", "noisy_bc_expert"]:
             from lerobot.rrl.dp_wrapper import DPWrapper
-            self.base_policy = DPWrapper(factory_utils.resolve_hf_path(self.cfg_task.hf_repo, self.cfg_task.diffusion_path))
-        elif self.cfg.env_options.base_model == "nn" or self.cfg.env_options.base_model == "noisy_nn":
+            if self.cfg.env_options.base_model == "bc_teleop":
+                diffusion_path = self.cfg_task.dp_teleop
+            else:
+                diffusion_path = self.cfg_task.dp_expert
+            self.base_policy = DPWrapper(factory_utils.resolve_hf_path(self.cfg_task.hf_repo, diffusion_path))
+            if self.cfg.env_options.base_model == "laggy_bc_expert":
+                self.add_lag_to_base = True
+            if self.cfg.env_options.base_model == "noisy_bc_expert":
+                self.add_noise_to_base = True
+            
+        elif self.cfg.env_options.base_model in ["nn", "noisy_nn"]:
             self.base_policy = NearestNeighborBuffer(
                 factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file), 
                 self.num_envs, 
@@ -97,8 +106,12 @@ class FactoryEnvResidual(DirectRLEnv):
             )
             if self.cfg.env_options.base_model == "noisy_nn":
                 self.add_noise_to_base = True
+        else:
+            raise ValueError(f"Unknown base model type: {self.cfg.env_options.base_model}")
 
         self.base_actions = torch.zeros((self.num_envs, 8), device=self.device)
+        self.last_base_actions = torch.zeros((self.num_envs, 8), device=self.device)
+        self.has_last_base = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
 
         # initial states
         self.initial_poses = self.build_init_state(factory_utils.resolve_hf_file(self.cfg_task.hf_repo, self.cfg_task.train_data_hf_file)) # (num_envs, num_eps, 13)
@@ -267,6 +280,7 @@ class FactoryEnvResidual(DirectRLEnv):
         self.curr_decimation = 0
 
         self.add_noise_to_base = False
+        self.add_lag_to_base = False
 
     def _setup_scene(self):
         """Initialize simulation scene."""
@@ -479,6 +493,11 @@ class FactoryEnvResidual(DirectRLEnv):
         noise = self.noise_gate * eps
         self.base_actions = self._apply_residual(noise, self.base_actions)
 
+    def _add_lag_to_base(self):
+        p_on = self.cfg.base_rand.lag_on_prob
+        lag_gate = (torch.rand(self.num_envs, 1, device=self.device) < p_on).float()
+        self.base_actions = lag_gate * self.last_base_actions + (1.0 - lag_gate) * self.base_actions
+
     def _get_factory_obs_state_dict(self):
         """Populate dictionaries for the policy and critic."""
         if self.cfg.env_options.obs_dmr:
@@ -534,12 +553,21 @@ class FactoryEnvResidual(DirectRLEnv):
 
     def _get_observations(self):
         """Get actor/critic inputs using asymmetric critic."""
-        if not self.teleop_mode and (self.cfg.env_options.base_model == "nn" or self.cfg.env_options.base_model == "noisy_nn"):
+        self.last_base_actions[self.has_last_base] = self.base_actions.clone()[self.has_last_base]
+
+        if not self.teleop_mode and self.cfg.env_options.base_model in ["nn", "noisy_nn"]:
             self._compute_nn_base_actions()
-        elif not self.teleop_mode and self.cfg.env_options.base_model == "bc":
+        elif not self.teleop_mode and self.cfg.env_options.base_model in ["bc_teleop", "bc_expert", "laggy_bc_expert", "noisy_bc_expert"]:
             self._compute_bc_base_actions()
+
+        self.last_base_actions[~self.has_last_base] = self.base_actions.clone()[~self.has_last_base]
+        self.has_last_base.fill_(True)
+
         if self.add_noise_to_base:
             self._add_noise_to_base()
+        if self.add_lag_to_base:
+            self._add_lag_to_base()
+
         obs_dict, state_dict = self._get_factory_obs_state_dict()
 
         obs_tensors = factory_utils.collapse_obs_dict(obs_dict, self.cfg.residual_obs_order + ["prev_actions"])
@@ -995,19 +1023,19 @@ class FactoryEnvResidual(DirectRLEnv):
             self.rew_sum[rew_name] += rew.mean().item()
 
         log_rew_int = 100
-        if self.common_step_counter % log_rew_int == 0:
-            mean_rew = 0.0
-            print("\n" + "=" * 50)
-            print(f" Iter {self.common_step_counter // log_rew_int}")
-            print("=" * 50)
-            for rew_name, rew in self.rew_sum.items():
-                val = rew / log_rew_int
-                color = GREEN if val >= 0 else RED
-                print(f"{rew_name}: {color}{val:.4f}{RESET}")
-                self.rew_sum[rew_name] = 0.0
-                mean_rew += val
-            print("mean rew: ", mean_rew)
-            print()   # trailing blank line
+        # if self.common_step_counter % log_rew_int == 0:
+        #     mean_rew = 0.0
+        #     print("\n" + "=" * 50)
+        #     print(f" Iter {self.common_step_counter // log_rew_int}")
+        #     print("=" * 50)
+        #     for rew_name, rew in self.rew_sum.items():
+        #         val = rew / log_rew_int
+        #         color = GREEN if val >= 0 else RED
+        #         print(f"{rew_name}: {color}{val:.4f}{RESET}")
+        #         self.rew_sum[rew_name] = 0.0
+        #         mean_rew += val
+        #     print("mean rew: ", mean_rew)
+        #     print()   # trailing blank line
 
         for rew_name, rew in rew_dict.items():
             rew_buf += rew_dict[rew_name]
@@ -1185,10 +1213,11 @@ class FactoryEnvResidual(DirectRLEnv):
         self._set_replay_default_pose(joints=noised_qpos, env_ids=env_ids) # compute intermediate values there
 
         # clear base policy action chunk
-        if self.cfg.env_options.base_model == "bc":
+        if self.cfg.env_options.base_model in ["bc_teleop", "bc_expert", "laggy_bc_expert", "noisy_bc_expert"]:
             self.base_policy.reset()
-        elif self.cfg.env_options.base_model == "nn" or self.cfg.env_options.base_model == "noisy_nn":
+        elif self.cfg.env_options.base_model in ["nn", "noisy_nn"]:
             self.base_policy.clear(env_ids)
+        self.has_last_base[env_ids] = False
         
         if self.add_noise_to_base:
             self.noise_gate[env_ids] = 0.0

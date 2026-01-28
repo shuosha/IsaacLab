@@ -10,6 +10,8 @@
 import argparse
 import sys
 import cv2
+import json
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -38,7 +40,13 @@ parser.add_argument(
     help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
-parser.add_argument("--base", choices=["nn", "bc"], default="nn", help="Base model type: nn (neural network) or bc (behavior cloning).")
+
+parser.add_argument("--base", choices=["noisy_nn", "nn", "bc_teleop", "bc_expert", "laggy_bc_expert", "noisy_bc_expert"], default=None, help="Base model type: nn (neural network) or bc (behavior cloning).")
+parser.add_argument("--base_only", action="store_true", default=False, help="If 1, use only base model actions without residuals.")
+
+parser.add_argument("--eval_episodes", type=int, default=200, help="Number of evaluation episodes.")
+parser.add_argument("--log_path", type=str, default=None, help="Path to save evaluation logs.")
+
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -105,7 +113,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "object_obs": False,        # coordinate frames
         "failed_envs": False,      # red tint
     }
-    env_cfg.env_options.base_model = args_cli.base if args_cli.base is not None else env_cfg.env_options.base_model
+    assert args_cli.base is not None, "Base model type must be specified."
+    env_cfg.env_options.base_model = args_cli.base
     env_cfg.env_options.ctrl_dmr = True
     env_cfg.env_options.obs_dmr = True
     env_cfg.env_options.data_aug = True
@@ -211,7 +220,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         obs = obs["obs"]
     tot_eps = 0
     tot_suc = 0
-    terminal_eps = 200
+    tot_rew = 0.0
+    terminal_eps = args_cli.eval_episodes
     pbar = tqdm(total=terminal_eps, desc="Rollouts", unit="ep")
     timestep = 0
     # required: enables the flag for batched observations
@@ -219,6 +229,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # initialize RNN states if used
     if agent.is_rnn:
         agent.init_rnn()
+    ep_return = torch.zeros(env.unwrapped.num_envs, dtype=torch.float32, device=env.device)
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
@@ -230,15 +241,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # convert obs to agent format
             obs = agent.obs_to_torch(obs)
             # agent stepping
-            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
+            actions = agent.get_action(obs, is_deterministic=agent.is_deterministic) * (1 - args_cli.base_only)
             # env stepping
-            obs, _, dones, _ = env.step(actions)
+            obs, rew, dones, _ = env.step(actions)
+            ep_return += rew # (num_envs, )
             if dones.any():
                 completed = dones.sum().item()
-                succeeded = env.unwrapped.ep_succeeded[dones].sum().item()
+                succeeded = env.unwrapped.eps_task_succeeded[dones].sum().item()
+                rew = ep_return[dones].cpu().numpy()
+                ep_return[dones] = 0.0
 
                 tot_eps += completed
                 tot_suc += succeeded
+                tot_rew += rew.sum()
 
                 update_val = min(completed, max(0, terminal_eps - pbar.n))
                 if update_val > 0:
@@ -250,13 +265,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if tot_eps >= terminal_eps:
                 print("final success rate:", tot_suc / tot_eps)
                 break
-
-            # perform operations for terminated episodes
-            if len(dones) > 0:
-                # reset rnn state for terminated episodes
-                if agent.is_rnn and agent.states is not None:
-                    for s in agent.states:
-                        s[:, dones, :] = 0.0
         if args_cli.video:
             timestep += 1
             # exit the play loop after recording one video
@@ -271,6 +279,44 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     pbar.close()
     # close the simulator
     env.close()
+
+    if args_cli.log_path is not None:
+        out_dict = {}
+
+        # ensure directory exists
+        os.makedirs(os.path.dirname(args_cli.log_path), exist_ok=True)
+
+        # Load existing JSON if possible
+        if os.path.exists(args_cli.log_path):
+            try:
+                with open(args_cli.log_path, "r") as f:
+                    content = f.read().strip()
+                    out_dict = json.loads(content) if content else {}
+            except json.JSONDecodeError:
+                # File exists but is empty or corrupted/truncated
+                print(f"[WARN] log_path not valid JSON (starting fresh): {args_cli.log_path}")
+                out_dict = {}
+        
+        name = Path(resume_path).parents[1].name
+        parts = name.split("_")
+        task_name = parts[0]
+        train_base = "_".join(parts[1:])   # "bc_teleop"
+        eval_base = f"{args_cli.base}"
+        if args_cli.base_only:
+            ckpt_name = f"{eval_base}_only"
+        else:
+            ckpt_name = f"residual_t:{train_base}_e:{eval_base}"
+        
+        out_dict.setdefault(task_name, {})
+        out_dict[task_name][ckpt_name] = {
+            "eval_episodes": int(terminal_eps),
+            "success_rate": float(tot_suc / tot_eps) if tot_eps > 0 else 0.0,
+            "mean_eps_return": float(tot_rew / tot_eps) if tot_eps > 0 else 0.0,
+            "base_model": args_cli.base,
+        }
+
+        with open(args_cli.log_path, "w") as f:
+            json.dump(out_dict, f, indent=2)
 
 
 if __name__ == "__main__":
